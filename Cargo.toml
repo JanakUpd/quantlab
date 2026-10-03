@@ -9,3 +9,10 @@ statrs = "0.19.1"
 rand = "0.10.3"
 rand_distr = "0.6.0"
 rayon = "1.12.0"
+
+[dev-dependencies]
+criterion = "0.8.2"
+
+[[bench]]
+name = "pricing"
+harness = false

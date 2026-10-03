@@ -31,7 +31,7 @@ pub fn monte_carlo_call(p: &OptionParams, paths: usize, seed: u64) -> (f64, f64)
 }
 
 pub fn monte_carlo_call_multithread(p: &OptionParams, paths: usize, seed: u64) -> (f64, f64) {
-    const CHUNK: usize = 1_000_000;
+    const CHUNK: usize = 65_536;
     let chunks = paths.div_ceil(CHUNK);
     let parts: Vec<(f64, f64)> = (0..chunks)
         .into_par_iter()
