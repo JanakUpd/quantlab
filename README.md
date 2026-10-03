@@ -1,1 +1,1 @@
-![CI](https://github.com/ТВОЙ_НИК/quantlab/actions/workflows/ci.yml/badge.svg)
+![CI](https://github.com/JanakUpd/quantlab/actions/workflows/ci.yml/badge.svg)
