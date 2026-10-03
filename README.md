@@ -1,0 +1,1 @@
+![CI](https://github.com/ТВОЙ_НИК/quantlab/actions/workflows/ci.yml/badge.svg)

@@ -41,9 +41,7 @@ pub fn monte_carlo_call_multithread(p: &OptionParams, paths: usize, seed: u64) -
         })
         .collect();
 
-    let (sum, sum_sq) = parts
-        .iter()
-        .fold((0.0, 0.0), |a, b| (a.0 + b.0, a.1 + b.1));
+    let (sum, sum_sq) = parts.iter().fold((0.0, 0.0), |a, b| (a.0 + b.0, a.1 + b.1));
     let n = paths as f64;
     let discount = (-p.rate * p.time).exp();
     let mean = sum / n;
