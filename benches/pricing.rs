@@ -1,6 +1,6 @@
 use std::hint::black_box;
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use quantlab::analytic::black_scholes;
 use quantlab::monte_carlo::{monte_carlo_call, monte_carlo_call_multithread};
 use quantlab::params::OptionParams;
