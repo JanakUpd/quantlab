@@ -93,6 +93,8 @@ src/
 └── main.rs          # command-line interface
 tests/
 └── pricing.rs       # integration tests
+benches/
+└── pricing.rs       # performance benchmarks
 ```
 
 ## Performance
