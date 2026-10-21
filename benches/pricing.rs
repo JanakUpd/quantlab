@@ -1,12 +1,12 @@
 use std::hint::black_box;
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use quantlab::analytic::black_scholes;
-use quantlab::monte_carlo::{monte_carlo_call, monte_carlo_call_multithread};
-use quantlab::params::OptionParams;
+use quantlab::options::analytic::black_scholes;
+use quantlab::options::monte_carlo::{monte_carlo_call, monte_carlo_call_multithread};
+use quantlab::options::option::EuropeanOption;
 
-fn atm() -> OptionParams {
-    OptionParams {
+fn atm() -> EuropeanOption {
+    EuropeanOption {
         spot: 100.0,
         strike: 100.0,
         time: 1.0,

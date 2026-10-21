@@ -2,12 +2,22 @@
 
 ![CI](https://github.com/JanakUpd/quantlab/actions/workflows/ci.yml/badge.svg?branch=main)
 
-A European option pricer in Rust. It prices calls and puts with the closed-form Black–Scholes formula and cross-checks the result with a Monte Carlo simulation that runs in parallel across all CPU cores.
+A quantitative finance toolkit in Rust: European option pricing (closed-form Black–Scholes cross-checked by parallel Monte Carlo) and fixed-coupon bond analytics (yield, duration, DV01, convexity).
 
-## Example
+## Features
+
+- **Black–Scholes** closed-form prices for European calls and puts
+- **Monte Carlo** pricing with a reported standard error
+- **Parallel simulation** with [rayon](https://github.com/rayon-rs/rayon), deterministic for a given seed regardless of thread count
+- **Bond analytics**: price, yield to maturity, Macaulay and modified duration, DV01, convexity
+- **Rate-shift sensitivity table** comparing exact repricing with duration and duration + convexity estimates
+- **Tests** against reference values, put–call parity, numerical derivatives and statistical agreement between methods
+- **Benchmarks** with criterion
+
+## Options
 
 ```bash
-cargo run --release -- --spot 100 --strike 100 --time 1 --rate 0.05 --vol 0.2 --paths 10000000000
+cargo run --release -- option --spot 100 --strike 100 --time 1 --rate 0.05 --vol 0.2 --paths 10000000000
 ```
 
 ```
@@ -19,40 +29,18 @@ Speedup: 8.08x
 
 The simulation agrees with the analytic price within its standard error, and the parallel version is about 8× faster than the single-threaded one.
 
-## Features
-
-- **Black–Scholes** closed-form prices for European calls and puts
-- **Monte Carlo** pricing with a reported standard error
-- **Parallel simulation** with [rayon](https://github.com/rayon-rs/rayon), deterministic for a given seed regardless of thread count
-- **Tests** against reference values, put–call parity and statistical agreement between the two methods
-
-## Usage
-
-| Flag | Meaning | Example |
-|------|---------|---------|
+| Flag | Meaning | Default |
+|------|---------|--------:|
 | `--spot` | Current price of the underlying, S | `100` |
 | `--strike` | Strike price, K | `100` |
 | `--time` | Time to expiry in years, T | `1` |
 | `--rate` | Risk-free rate, r | `0.05` |
 | `--vol` | Volatility, σ | `0.2` |
-| `--paths` | Monte Carlo paths (default 1 000 000) | `1000000000` |
+| `--paths` | Monte Carlo paths | `1000000` |
 
-As a library:
+### How it works
 
-```rust
-use quantlab::analytic::black_scholes;
-use quantlab::monte_carlo::monte_carlo_call_multithread;
-use quantlab::params::OptionParams;
-
-let p = OptionParams { spot: 100.0, strike: 100.0, time: 1.0, rate: 0.05, vol: 0.2 };
-
-let (call, put) = black_scholes(&p);
-let (mc_call, std_err) = monte_carlo_call_multithread(&p, 1_000_000, 42);
-```
-
-## How it works
-
-### Black–Scholes
+**Black–Scholes**
 
 $$C = S\,N(d_1) - K e^{-rT} N(d_2), \qquad P = K e^{-rT} N(-d_2) - S\,N(-d_1)$$
 
@@ -60,7 +48,7 @@ $$d_1 = \frac{\ln(S/K) + (r + \sigma^2/2)\,T}{\sigma\sqrt{T}}, \qquad d_2 = d_1 
 
 where $N$ is the standard normal CDF.
 
-### Monte Carlo
+**Monte Carlo**
 
 Terminal prices are sampled under the risk-neutral measure:
 
@@ -68,11 +56,11 @@ $$S_T = S \exp\left(\left(r - \tfrac{\sigma^2}{2}\right)T + \sigma\sqrt{T}\,Z\ri
 
 The price is the discounted mean payoff, $e^{-rT}\,\overline{\max(S_T - K, 0)}$, and the standard error is $e^{-rT}\,s/\sqrt{n}$, where $s$ is the sample standard deviation of the payoffs. Mean and variance are accumulated as running sums, so memory use does not grow with the number of paths.
 
-### Parallelism
+**Parallelism**
 
-Paths are split into chunks of one million. Each chunk gets its own RNG seeded with `seed + chunk_index`, so chunks are independent and the result does not depend on how rayon schedules them. Partial sums are collected in chunk order and added sequentially, which keeps the floating-point result reproducible.
+Paths are split into chunks of 65 536. Each chunk gets its own RNG seeded with `seed + chunk_index`, so chunks are independent and the result does not depend on how rayon schedules them. Partial sums are collected in chunk order and added sequentially, which keeps the floating-point result reproducible.
 
-## Convergence
+### Convergence
 
 The standard error shrinks as $1/\sqrt{n}$: every 100× more paths gives one more correct decimal place.
 
@@ -82,24 +70,106 @@ The standard error shrinks as $1/\sqrt{n}$: every 100× more paths gives one mor
 | 1 000 000 000 | 10.4505 | 0.0005 | 10.4506 |
 | 10 000 000 000 | 10.4508 | 0.0001 | 10.4506 |
 
+## Bonds
+
+```bash
+cargo run --release -- bond --coupon 0.05 --maturity 5 --yield 0.05
+```
+
+```
+Bond: face 100, coupon 5.00%, maturity 5.0y, freq 1
+Yield:                 5.0000%
+Price:               100.0000
+Macaulay duration:     4.5460
+Modified duration:     4.3295
+DV01:                  0.0433
+Convexity:            23.9360
+
+ Shift(bp)      Exact   Duration   Dur+Conv    Err(D)  Err(D+C)
+      -300   114.1404   112.9884   114.0655   -1.1519   -0.0748
+      -100   104.4518   104.3295   104.4492   -0.1223   -0.0027
+       -10   100.4341   100.4329   100.4341   -0.0012   +0.0000
+       +10    99.5682    99.5671    99.5682   -0.0012   +0.0000
+      +100    95.7876    95.6705    95.7902   -0.1171   +0.0026
+      +300    88.0219    87.0116    88.0887   -1.0103   +0.0668
+```
+
+The duration estimate always undershoots the true price, in both directions: price is convex in yield, so the tangent line lies below the curve. Adding the convexity term removes most of the error.
+
+Pass `--price` instead of `--yield` to solve for yield to maturity:
+
+```bash
+cargo run --release -- bond --coupon 0.05 --maturity 5 --price 95.7876   # Yield: 6.0000%
+```
+
+| Flag | Meaning | Default |
+|------|---------|--------:|
+| `--face` | Face value | `100` |
+| `--coupon` | Annual coupon rate | — |
+| `--maturity` | Years to maturity | — |
+| `--freq` | Coupons per year | `1` |
+| `--yield` / `--price` | Yield to maturity, or market price to solve it from | — |
+| `--shifts` | Yield shifts in basis points for the sensitivity table | `-300,-100,-10,10,100,300` |
+
+### How it works
+
+$$P(y) = \sum_k \frac{CF_k}{(1 + y/m)^{m t_k}}$$
+
+where $m$ is the coupon frequency and $t_k$ the time of the $k$-th cash flow in years.
+
+- **Yield to maturity** is found by bisection. Price is strictly decreasing in yield, so the root is unique whenever it exists.
+- **Macaulay duration** is the present-value-weighted average time of the cash flows; **modified duration** $D_{mod} = D_{mac}/(1 + y/m)$ is the price sensitivity, $dP/dy = -D_{mod} P$.
+- **DV01** is the price change for a 1 bp move: $D_{mod} \cdot P \cdot 10^{-4}$.
+- **Convexity** is the normalized second derivative of price:
+  $$C = \frac{1}{P}\sum_k \frac{t_k (t_k + 1/m)\, CF_k}{(1 + y/m)^{m t_k + 2}}$$
+- Together they give a second-order Taylor expansion:
+  $$\frac{\Delta P}{P} \approx -D_{mod}\,\Delta y + \tfrac12 C\,(\Delta y)^2$$
+
+## As a library
+
+```rust
+use quantlab::bonds::Bond;
+use quantlab::options::analytic::black_scholes;
+use quantlab::options::monte_carlo::monte_carlo_call_multithread;
+use quantlab::options::option::EuropeanOption;
+
+let opt = EuropeanOption { spot: 100.0, strike: 100.0, time: 1.0, rate: 0.05, vol: 0.2 };
+let (call, put) = black_scholes(&opt);
+let (mc_call, std_err) = monte_carlo_call_multithread(&opt, 1_000_000, 42);
+
+let bond = Bond::new(100.0, 0.05, 5.0, 1);
+let price = bond.price(0.05);
+let ytm = bond.ytm(95.7876);
+let duration = bond.modified_duration(0.05);
+```
+
 ## Project structure
 
 ```
 src/
-├── lib.rs           # public API
-├── params.rs        # OptionParams
-├── analytic.rs      # Black–Scholes formula
-├── monte_carlo.rs   # single-threaded and parallel simulation
-└── main.rs          # command-line interface
+├── lib.rs
+├── main.rs              # CLI with `option` and `bond` subcommands
+├── options/
+│   ├── mod.rs
+│   ├── option.rs        # EuropeanOption
+│   ├── analytic.rs      # Black–Scholes
+│   └── monte_carlo.rs   # single-threaded and parallel simulation
+└── bonds/
+    ├── mod.rs
+    └── bond.rs          # Bond: cash flows, price, YTM, duration, convexity
 tests/
-└── pricing.rs       # integration tests
+├── pricing.rs
+└── bonds.rs
 benches/
-└── pricing.rs       # performance benchmarks
+├── pricing.rs
+└── bonds.rs
 ```
 
 ## Performance
 
-Measured with [criterion](https://github.com/bheisler/criterion.rs), ATM call, `cargo bench` on Ryzen 7 9700x:
+Measured with [criterion](https://github.com/bheisler/criterion.rs).
+
+Options, ATM call, `cargo bench --bench pricing` on Ryzen 7 9700X:
 
 | Benchmark | Time | Throughput |
 |-----------|-----:|-----------:|
@@ -111,26 +181,53 @@ Measured with [criterion](https://github.com/bheisler/criterion.rs), ATM call, `
 
 The closed-form formula is about 225 000× faster than a 1M-path simulation, which is why Monte Carlo is reserved for payoffs without an analytic solution.
 
+Bonds, `cargo bench --bench bonds` on Apple M4 (10-core):
+
+| Benchmark | Time |
+|-----------|-----:|
+| Price, 5y annual (5 cash flows) | 72 ns |
+| Price, 30y semi-annual (60 cash flows) | 665 ns |
+| Modified duration, 30y | 1.3 µs |
+| Convexity, 30y | 1.3 µs |
+| YTM by bisection, 30y | 30 µs |
+| Shift table, 6 shifts, 30y | 36 µs |
+
+YTM costs about 45 price evaluations, one per bisection step. The current implementation is straightforward rather than tuned: each pass calls `powf` and allocates the cash-flow vector — see the roadmap.
+
 ## Testing
 
 ```bash
 cargo test
 ```
 
-The suite checks:
+Options:
 
 - prices against known reference values, including a non-unit maturity
 - put–call parity, $C - P = S - K e^{-rT}$, on arbitrary parameters
 - that Monte Carlo lands within three standard errors of the formula, for both versions
 - that the parallel version is reproducible for a fixed seed
 
+Bonds:
+
+- cash flows, prices and durations against reference values, annual and semi-annual
+- modified duration and convexity match numerical first and second derivatives
+- the round trip `ytm(price(y)) = y`, including zero and negative yields
+- zero-coupon Macaulay duration equals maturity; higher coupon means lower duration
+- the duration-only estimate always undershoots the exact price, and convexity reduces the error
+
 ## Roadmap
 
+- [ ] Bonds: allocation-free cash flows and iterative discount factors instead of `powf`
+- [ ] Bonds: single-pass analytics (price, duration, convexity in one loop)
+- [ ] Bonds: Newton's method for YTM, benchmarked against bisection
+- [ ] Portfolio duration and immunization
+- [ ] Key rate durations
 - [ ] Antithetic variates for variance reduction
 - [ ] Greeks, analytic and via finite differences
 - [ ] Implied volatility solver
 - [ ] Binomial tree for American options
 - [x] Benchmarks with criterion
+- [x] Bond analytics: price, YTM, duration, DV01, convexity
 
 ## License
 

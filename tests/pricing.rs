@@ -1,9 +1,9 @@
-use quantlab::analytic::black_scholes;
-use quantlab::monte_carlo::{monte_carlo_call, monte_carlo_call_multithread};
-use quantlab::params::OptionParams;
+use quantlab::options::analytic::black_scholes;
+use quantlab::options::monte_carlo::{monte_carlo_call, monte_carlo_call_multithread};
+use quantlab::options::option::EuropeanOption;
 
-fn params(spot: f64, strike: f64, time: f64, rate: f64, vol: f64) -> OptionParams {
-    OptionParams {
+fn params(spot: f64, strike: f64, time: f64, rate: f64, vol: f64) -> EuropeanOption {
+    EuropeanOption {
         spot,
         strike,
         time,
@@ -12,7 +12,7 @@ fn params(spot: f64, strike: f64, time: f64, rate: f64, vol: f64) -> OptionParam
     }
 }
 
-fn atm() -> OptionParams {
+fn atm() -> EuropeanOption {
     params(100.0, 100.0, 1.0, 0.05, 0.2)
 }
 

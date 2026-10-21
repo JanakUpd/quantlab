@@ -4,15 +4,27 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-clap = { version = "4.6.7", features = ["derive"] }
+clap = { version = "4.6.7", features = ["derive"], optional = true }
 statrs = "0.19.1"
 rand = "0.10.3"
 rand_distr = "0.6.0"
 rayon = "1.12.0"
 
+[features]
+default = ["cli"]
+cli = ["dep:clap"]
+
+[[bin]]
+name = "quantlab"
+path = "src/main.rs"
+required-features = ["cli"]
 [dev-dependencies]
 criterion = "0.8.2"
 
 [[bench]]
 name = "pricing"
+harness = false
+
+[[bench]]
+name = "bonds"
 harness = false

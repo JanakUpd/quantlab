@@ -1,7 +1,7 @@
-use crate::params::OptionParams;
+use crate::options::option::EuropeanOption;
 use statrs::distribution::{ContinuousCDF, Normal};
 
-pub fn black_scholes(p: &OptionParams) -> (f64, f64) {
+pub fn black_scholes(p: &EuropeanOption) -> (f64, f64) {
     let d1 = ((p.spot / p.strike).ln() + (p.rate + p.vol.powi(2) / 2.0) * p.time)
         / (p.vol * p.time.sqrt());
     let d2 = d1 - p.vol * p.time.sqrt();
