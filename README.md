@@ -181,16 +181,19 @@ Options, ATM call, `cargo bench --bench pricing` on Ryzen 7 9700X:
 
 The closed-form formula is about 225 000× faster than a 1M-path simulation, which is why Monte Carlo is reserved for payoffs without an analytic solution.
 
-Bonds, `cargo bench --bench bonds` on Apple M4 (10-core):
+Bonds, `cargo bench --bench bonds` on Ryzen 7 9700X:
 
-| Benchmark | Time |
-|-----------|-----:|
-| Price, 5y annual (5 cash flows) | 72 ns |
-| Price, 30y semi-annual (60 cash flows) | 665 ns |
-| Modified duration, 30y | 1.3 µs |
-| Convexity, 30y | 1.3 µs |
-| YTM by bisection, 30y | 30 µs |
-| Shift table, 6 shifts, 30y | 36 µs |
+| Benchmark | Before | After | Speedup |
+|-----------|-------:|------:|--------:|
+| Price, 5y annual (5 cash flows) | 70.4 ns | 4.1 ns | 17× |
+| Price, 30y semi-annual (60 cash flows) | 518 ns | 41.4 ns | 12.5× |
+| Modified duration, 30y | 1.03 µs | 107 ns | 9.6× |
+| Convexity, 30y | 1.04 µs | 114 ns | 9.1× |
+| YTM by bisection, 30y | 23.3 µs | 3.42 µs | 6.8× |
+| Shift table, 6 shifts, 30y | 27.7 µs | 2.64 µs | 10.5× |
+
+The first version built a `Vec` of cash flows and called `powf` for every discount factor. The current one iterates over cash flows lazily and evaluates each sum with Horner's scheme in powers of $v = 1/(1 + y/m)$, so every cash flow costs one multiply and one add. Most of the gain came from removing `powf`: with the allocation gone but `powf` still in place, duration was only 45% faster.
+
 
 YTM costs about 45 price evaluations, one per bisection step. The current implementation is straightforward rather than tuned: each pass calls `powf` and allocates the cash-flow vector — see the roadmap.
 
@@ -217,7 +220,6 @@ Bonds:
 
 ## Roadmap
 
-- [ ] Bonds: allocation-free cash flows and iterative discount factors instead of `powf`
 - [ ] Bonds: single-pass analytics (price, duration, convexity in one loop)
 - [ ] Bonds: Newton's method for YTM, benchmarked against bisection
 - [ ] Portfolio duration and immunization
@@ -226,6 +228,7 @@ Bonds:
 - [ ] Greeks, analytic and via finite differences
 - [ ] Implied volatility solver
 - [ ] Binomial tree for American options
+- [x] Bonds: allocation-free cash flows and iterative discount factors instead of `powf`
 - [x] Benchmarks with criterion
 - [x] Bond analytics: price, YTM, duration, DV01, convexity
 

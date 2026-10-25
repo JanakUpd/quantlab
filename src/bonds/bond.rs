@@ -23,24 +23,26 @@ impl Bond {
             freq,
         }
     }
-    pub fn cashflows(&self) -> Vec<(f64, f64)> {
+
+    fn cashflow_iter(&self) -> impl DoubleEndedIterator<Item = (f64, f64)> + '_ {
+        let n = (self.maturity * self.freq as f64).round() as usize;
         let coupon = self.coupon_rate * self.face / self.freq as f64;
-        let mut res: Vec<_> = (1..=((self.maturity * self.freq as f64).round() as usize))
-            .map(|x| (x as f64 / self.freq as f64, coupon))
-            .collect();
-        if let Some(x) = res.last_mut() {
-            x.1 += self.face;
-        }
-        res
+        (1..n)
+            .map(move |x| (x as f64 / self.freq as f64, coupon))
+            .chain([(n as f64 / self.freq as f64, coupon + self.face)])
+    }
+
+    pub fn cashflows(&self) -> Vec<(f64, f64)> {
+        self.cashflow_iter().collect()
     }
 
     pub fn price(&self, rate: f64) -> f64 {
-        let m = self.freq as f64;
-        let base = self.base(rate);
-        self.cashflows()
-            .iter()
-            .map(|&(t, cf)| cf / base.powf(m * t))
-            .sum()
+        let v = 1.0 / self.base(rate);
+        let mut res = 0.0;
+        for (_, cf) in self.cashflow_iter().rev() {
+            res = res * v + cf;
+        }
+        res * v
     }
 
     pub fn ytm(&self, market_price: f64) -> Option<f64> {
@@ -69,12 +71,12 @@ impl Bond {
     }
 
     fn pv_weighted_time(&self, rate: f64) -> f64 {
-        let m = self.freq as f64;
-        let base = self.base(rate);
-        self.cashflows()
-            .iter()
-            .map(|&(t, cf)| t * cf / base.powf(m * t))
-            .sum()
+        let mut res = 0.0;
+        let v = 1.0 / self.base(rate);
+        for (t, cf) in self.cashflow_iter().rev() {
+            res = res * v + cf * t
+        }
+        res * v
     }
 
     pub fn macaulay_duration(&self, rate: f64) -> f64 {
@@ -94,13 +96,13 @@ impl Bond {
     }
 
     pub fn convexity(&self, rate: f64) -> f64 {
+        let mut res = 0.0;
+        let v = 1.0 / self.base(rate);
         let m = self.freq as f64;
-        let base = self.base(rate);
-        self.cashflows()
-            .iter()
-            .map(|&(t, cf)| t * (t + 1.0 / m) * cf / base.powf(t * m + 2.0))
-            .sum::<f64>()
-            / self.price(rate)
+        for (t, cf) in self.cashflow_iter().rev() {
+            res = res * v + t * (t + 1.0 / m) * cf;
+        }
+        res * v * v * v / self.price(rate)
     }
 
     pub fn price_estimate_duration(&self, rate: f64, delta_rate: f64) -> f64 {
