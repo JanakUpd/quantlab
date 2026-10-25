@@ -45,7 +45,7 @@ impl Bond {
         res * v
     }
 
-    pub fn ytm(&self, market_price: f64) -> Option<f64> {
+    pub fn ytm_bisection(&self, market_price: f64) -> Option<f64> {
         let (mut l, mut r) = (-0.999, 5.0);
         if market_price <= 0.0 || market_price > self.price(l) || market_price < self.price(r) {
             return None;
@@ -64,6 +64,25 @@ impl Bond {
             iter += 1;
         }
         Some((l + r) / 2.0)
+    }
+
+    pub fn ytm(&self, market_price: f64) -> Option<f64> {
+        if market_price <= 0.0 || market_price > self.price(-0.99) || market_price < self.price(5.0) {
+            return None;
+        }
+        let mut y = self.coupon_rate;
+        let mut prev_y;
+        let mut iter = 0;
+        loop {
+            if iter > 20 {
+                return self.ytm_bisection(market_price);
+            }
+            let price = self.price(y);
+            prev_y = y;
+            y += (price - market_price) * self.base(y) / self.pv_weighted_time(y);
+            iter += 1;
+            if (y - prev_y).abs() < 1e-12 { return Some(y); }
+        }
     }
 
     fn base(&self, rate: f64) -> f64 {

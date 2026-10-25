@@ -117,7 +117,7 @@ $$P(y) = \sum_k \frac{CF_k}{(1 + y/m)^{m t_k}}$$
 
 where $m$ is the coupon frequency and $t_k$ the time of the $k$-th cash flow in years.
 
-- **Yield to maturity** is found by bisection. Price is strictly decreasing in yield, so the root is unique whenever it exists.
+- **Yield to maturity** is found by Newton's method, $y_{n+1} = y_n + \frac{P(y_n) - P_{market}}{D_{mod}\,P(y_n)}$, starting from the coupon rate. Price is strictly decreasing and convex in yield, so the root is unique and Newton converges in a few steps; bisection is kept as a fallback if it fails to converge.
 - **Macaulay duration** is the present-value-weighted average time of the cash flows; **modified duration** $D_{mod} = D_{mac}/(1 + y/m)$ is the price sensitivity, $dP/dy = -D_{mod} P$.
 - **DV01** is the price change for a 1 bp move: $D_{mod} \cdot P \cdot 10^{-4}$.
 - **Convexity** is the normalized second derivative of price:
@@ -192,10 +192,15 @@ Bonds, `cargo bench --bench bonds` on Ryzen 7 9700X:
 | YTM by bisection, 30y | 23.3 µs | 3.42 µs | 6.8× |
 | Shift table, 6 shifts, 30y | 27.7 µs | 2.64 µs | 10.5× |
 
-The first version built a `Vec` of cash flows and called `powf` for every discount factor. The current one iterates over cash flows lazily and evaluates each sum with Horner's scheme in powers of $v = 1/(1 + y/m)$, so every cash flow costs one multiply and one add. Most of the gain came from removing `powf`: with the allocation gone but `powf` still in place, duration was only 45% faster.
+Yield solvers, same bond priced at 7%:
 
+| Bond | Cash flows | Bisection | Newton | Speedup |
+|------|-----------:|----------:|-------:|--------:|
+| 5y annual | 5 | 565 ns | 74 ns | 7.6× |
+| 30y semi-annual | 60 | 3.44 µs | 731 ns | 4.7× |
+| 5000y semi-annual | 10 000 | 493 µs | 135 µs | 3.7× |
 
-YTM costs about 45 price evaluations, one per bisection step. The current implementation is straightforward rather than tuned: each pass calls `powf` and allocates the cash-flow vector — see the roadmap.
+Bisection always takes about 45 iterations; Newton needs 4–8, more for very long bonds, whose price curve behaves like a perpetuity and is far more convex. Racing the two solvers on separate threads was about 100× slower than Newton alone — spawning a thread costs much more than a sub-microsecond solve.
 
 ## Testing
 
@@ -217,17 +222,18 @@ Bonds:
 - the round trip `ytm(price(y)) = y`, including zero and negative yields
 - zero-coupon Macaulay duration equals maturity; higher coupon means lower duration
 - the duration-only estimate always undershoots the exact price, and convexity reduces the error
+- Newton and bisection agree on yield to 1e-9 across zero, negative and high yields
 
 ## Roadmap
 
 - [ ] Bonds: single-pass analytics (price, duration, convexity in one loop)
-- [ ] Bonds: Newton's method for YTM, benchmarked against bisection
 - [ ] Portfolio duration and immunization
 - [ ] Key rate durations
 - [ ] Antithetic variates for variance reduction
 - [ ] Greeks, analytic and via finite differences
 - [ ] Implied volatility solver
 - [ ] Binomial tree for American options
+- [x] Bonds: Newton's method for YTM, benchmarked against bisection
 - [x] Bonds: allocation-free cash flows and iterative discount factors instead of `powf`
 - [x] Benchmarks with criterion
 - [x] Bond analytics: price, YTM, duration, DV01, convexity

@@ -85,6 +85,40 @@ fn ytm_none_for_impossible_price() {
     assert!(bond_a().ytm(-5.0).is_none());
 }
 
+#[test]
+fn ytm_bisection_roundtrip() {
+    for b in [bond_a(), bond_b()] {
+        for y in [-0.02, 0.0, 0.01, 0.05, 0.08, 0.15, 0.50] {
+            let p = b.price(y);
+            let found = b.ytm_bisection(p).expect("ytm should exist");
+            assert!((found - y).abs() < 1e-9, "y={y}, found={found}");
+        }
+    }
+}
+
+#[test]
+fn newton_and_bisection_agree() {
+    let long = Bond::new(100.0, 0.06, 30.0, 2);
+    for b in [bond_a(), bond_b(), long] {
+        for y in [-0.02, 0.0, 0.03, 0.07, 0.15, 0.50] {
+            let p = b.price(y);
+            let n = b.ytm(p).unwrap();
+            let s = b.ytm_bisection(p).unwrap();
+            assert!((n - s).abs() < 1e-9, "y={y}: newton={n}, bisection={s}");
+        }
+    }
+}
+
+#[test]
+fn ytm_zero_coupon() {
+    // у бескупонной облигации старт Ньютона = 0, проверяем, что он всё равно сходится
+    let z = Bond::new(100.0, 0.0, 10.0, 1);
+    for y in [0.01, 0.05, 0.20] {
+        let p = z.price(y);
+        assert!((z.ytm(p).unwrap() - y).abs() < 1e-9);
+    }
+}
+
 // ---------- Дюрации и DV01 ----------
 
 #[test]
