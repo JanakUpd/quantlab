@@ -67,7 +67,8 @@ impl Bond {
     }
 
     pub fn ytm(&self, market_price: f64) -> Option<f64> {
-        if market_price <= 0.0 || market_price > self.price(-0.99) || market_price < self.price(5.0) {
+        if market_price <= 0.0 || market_price > self.price(-0.99) || market_price < self.price(5.0)
+        {
             return None;
         }
         let mut y = self.coupon_rate;
@@ -81,7 +82,9 @@ impl Bond {
             prev_y = y;
             y += (price - market_price) * self.base(y) / self.pv_weighted_time(y);
             iter += 1;
-            if (y - prev_y).abs() < 1e-12 { return Some(y); }
+            if (y - prev_y).abs() < 1e-12 {
+                return Some(y);
+            }
         }
     }
 
