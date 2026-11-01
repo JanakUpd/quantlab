@@ -14,6 +14,15 @@ pub struct ShiftRow {
     pub convexity_est: f64,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct BondAnalytics {
+    pub price: f64,
+    pub macaulay_duration: f64,
+    pub modified_duration: f64,
+    pub dv01: f64,
+    pub convexity: f64,
+}
+
 impl Bond {
     pub fn new(face: f64, coupon_rate: f64, maturity: f64, freq: u32) -> Self {
         Self {
@@ -138,17 +147,44 @@ impl Bond {
     }
 
     pub fn shift_table(&self, rate: f64, shifts_bp: &[f64]) -> Vec<ShiftRow> {
+        let an = self.analytics(rate);
         shifts_bp
             .iter()
-            .map(|x| {
-                let delta_rate = *x / 10_000.0;
+            .map(|&bp| {
+                let delta_rate = bp / 10_000.0;
                 ShiftRow {
-                    shift_bp: *x,
+                    shift_bp: bp,
                     exact: self.price(rate + delta_rate),
-                    duration_est: self.price_estimate_duration(rate, delta_rate),
-                    convexity_est: self.price_estimate_convexity(rate, delta_rate),
+                    duration_est: an.price * (1.0 - an.modified_duration * delta_rate),
+                    convexity_est: an.price
+                        * (1.0 - an.modified_duration * delta_rate
+                            + 0.5 * an.convexity * delta_rate * delta_rate),
                 }
             })
             .collect()
+    }
+
+    pub fn analytics(&self, rate: f64) -> BondAnalytics {
+        let mut pr = 0.0;
+        let mut wt = 0.0;
+        let mut cv = 0.0;
+        let v = 1.0 / self.base(rate);
+        let m = self.freq as f64;
+        for (t, cf) in self.cashflow_iter().rev() {
+            pr = pr * v + cf;
+            wt = wt * v + cf * t;
+            cv = cv * v + t * (t + 1.0 / m) * cf;
+        }
+        pr *= v;
+        wt *= v;
+        let mac_d = wt / pr;
+        let mod_d = mac_d * v;
+        BondAnalytics {
+            price: pr,
+            macaulay_duration: mac_d,
+            modified_duration: mod_d,
+            dv01: wt * v * 0.0001,
+            convexity: cv * v.powi(3) / pr,
+        }
     }
 }

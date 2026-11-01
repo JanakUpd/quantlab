@@ -207,3 +207,16 @@ fn convexity_reduces_error() {
         assert!(err_c < err_d, "shift={}", row.shift_bp);
     }
 }
+
+#[test]
+fn analytics_matches_individual_methods() {
+    for b in [bond_a(), bond_b()] {
+        for y in [0.01, 0.05, 0.10] {
+            let a = b.analytics(y);
+            assert!((a.price - b.price(y)).abs() < 1e-10);
+            assert!((a.modified_duration - b.modified_duration(y)).abs() < 1e-10);
+            assert!((a.convexity - b.convexity(y)).abs() < 1e-10);
+            assert!((a.dv01 - b.dv01(y)).abs() < 1e-12);
+        }
+    }
+}

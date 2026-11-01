@@ -190,7 +190,9 @@ Bonds, `cargo bench --bench bonds` on Ryzen 7 9700X:
 | Modified duration, 30y | 1.03 µs | 107 ns | 9.6× |
 | Convexity, 30y | 1.04 µs | 114 ns | 9.1× |
 | YTM by bisection, 30y | 23.3 µs | 3.42 µs | 6.8× |
-| Shift table, 6 shifts, 30y | 27.7 µs | 2.64 µs | 10.5× |
+| Shift table, 6 shifts, 30y | 27.7 µs | 367 ns | 75× |
+
+The shift table now computes price, duration and convexity once in a single pass (`Bond::analytics`), then reprices only the shifted yields — 7 passes over the cash flows instead of about 54.
 
 Yield solvers, same bond priced at 7%:
 
@@ -226,13 +228,13 @@ Bonds:
 
 ## Roadmap
 
-- [ ] Bonds: single-pass analytics (price, duration, convexity in one loop)
 - [ ] Portfolio duration and immunization
 - [ ] Key rate durations
 - [ ] Antithetic variates for variance reduction
 - [ ] Greeks, analytic and via finite differences
 - [ ] Implied volatility solver
 - [ ] Binomial tree for American options
+- [x] Bonds: single-pass analytics (price, duration, convexity in one loop)
 - [x] Bonds: Newton's method for YTM, benchmarked against bisection
 - [x] Bonds: allocation-free cash flows and iterative discount factors instead of `powf`
 - [x] Benchmarks with criterion
