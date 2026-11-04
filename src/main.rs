@@ -42,6 +42,9 @@ enum Command {
         /// Maturity date, YYYY-MM-DD
         #[arg(long)]
         maturity: NaiveDate,
+        /// Valuation (settlement) date, YYYY-MM-DD; defaults to the issue date
+        #[arg(long)]
+        settlement: Option<NaiveDate>,
         /// Coupons per year: 1, 2, 4 or 12
         #[arg(long, default_value_t = 1, conflicts_with = "days")]
         freq: u32,
@@ -54,6 +57,7 @@ enum Command {
             required_unless_present = "price"
         )]
         yld: Option<f64>,
+        /// Clean (quoted) price, in the same units as --face
         #[arg(long)]
         price: Option<f64>,
         #[arg(
@@ -86,43 +90,89 @@ fn run_option(p: EuropeanOption, paths: usize) {
     );
 }
 
-fn run_bond(bond: Bond, yld: Option<f64>, price: Option<f64>, shifts: &[f64]) {
+fn fail(msg: String) -> ! {
+    eprintln!("error: {msg}");
+    std::process::exit(1);
+}
+
+fn run_bond(
+    bond: Bond,
+    settlement: NaiveDate,
+    yld: Option<f64>,
+    price: Option<f64>,
+    shifts: &[f64],
+) {
     if let Err(e) = bond.cashflows() {
-        eprintln!("error: invalid bond dates: {e:?}");
-        std::process::exit(1);
+        fail(format!("invalid bond dates: {e:?}"));
     }
+    if settlement < bond.issue_date {
+        fail(format!(
+            "settlement {settlement} is before issue date {}",
+            bond.issue_date
+        ));
+    }
+    if settlement >= bond.maturity {
+        fail(format!(
+            "settlement {settlement} must be before maturity {}",
+            bond.maturity
+        ));
+    }
+
+    // --price is a clean (quoted) price, in the same units as --face
     let yld = match (yld, price) {
         (Some(y), _) => y,
-        (None, Some(p)) => bond.ytm(p).unwrap_or_else(|| {
-            eprintln!("error: no yield in [-99.9%, 500%] matches price {p}");
-            std::process::exit(1);
+        (None, Some(p)) => bond.ytm_from_clean(p, settlement).unwrap_or_else(|| {
+            fail(format!(
+                "no yield in [-99.9%, 500%] matches clean price {p}"
+            ));
         }),
         (None, None) => unreachable!("clap requires --yield or --price"),
     };
+
     println!(
         "Bond: face {}, issued {}, matures {}, {:?}",
         bond.face, bond.issue_date, bond.maturity, bond.nature
     );
+    println!("Settlement: {settlement}");
     println!("{:<20}{:>9.4}%", "Yield:", yld * 100.0);
-    println!("{:<20}{:>10.4}", "Price:", bond.price(yld));
+    println!(
+        "{:<20}{:>10.4}",
+        "Clean price:",
+        bond.clean_price(yld, settlement)
+    );
+    println!(
+        "{:<20}{:>10.4}",
+        "Accrued interest:",
+        bond.accrued(settlement)
+    );
+    println!(
+        "{:<20}{:>10.4}",
+        "Dirty price:",
+        bond.price(yld, settlement)
+    );
     println!(
         "{:<20}{:>10.4}",
         "Macaulay duration:",
-        bond.macaulay_duration(yld)
+        bond.macaulay_duration(yld, settlement)
     );
     println!(
         "{:<20}{:>10.4}",
         "Modified duration:",
-        bond.modified_duration(yld)
+        bond.modified_duration(yld, settlement)
     );
-    println!("{:<20}{:>10.4}", "DV01:", bond.dv01(yld));
-    println!("{:<20}{:>10.4}", "Convexity:", bond.convexity(yld));
+    println!("{:<20}{:>10.4}", "DV01:", bond.dv01(yld, settlement));
+    println!(
+        "{:<20}{:>10.4}",
+        "Convexity:",
+        bond.convexity(yld, settlement)
+    );
     println!();
+    println!("Shift table (dirty prices):");
     println!(
         "{:>10} {:>10} {:>10} {:>10} {:>9} {:>9}",
         "Shift(bp)", "Exact", "Duration", "Dur+Conv", "Err(D)", "Err(D+C)"
     );
-    for x in bond.shift_table(yld, shifts) {
+    for x in bond.shift_table(yld, shifts, settlement) {
         println!(
             "{:>+10.0} {:>10.4} {:>10.4} {:>10.4} {:>+9.4} {:>+9.4}",
             x.shift_bp,
@@ -159,6 +209,7 @@ fn main() {
             coupon,
             issue,
             maturity,
+            settlement,
             freq,
             days,
             yld,
@@ -174,15 +225,12 @@ fn main() {
                         2 => BondFrequency::SemiAnnual,
                         4 => BondFrequency::Quarterly,
                         12 => BondFrequency::Monthly,
-                        other => {
-                            eprintln!("error: --freq must be 1, 2, 4 or 12, got {other}");
-                            std::process::exit(1);
-                        }
+                        other => fail(format!("--freq must be 1, 2, 4 or 12, got {other}")),
                     };
                     Bond::frequent(issue, face, maturity, frequency, rate)
                 }
             };
-            run_bond(bond, yld, price, &shifts)
+            run_bond(bond, settlement.unwrap_or(issue), yld, price, &shifts)
         }
     }
 }

@@ -25,6 +25,7 @@ fn bench_bonds(c: &mut Criterion) {
         0.06,
     );
     let y = 0.05;
+    let s = issue;
 
     c.bench_function("cashflows, 5y annual", |b| {
         b.iter(|| black_box(&short).cashflows())
@@ -34,10 +35,15 @@ fn bench_bonds(c: &mut Criterion) {
     });
 
     c.bench_function("price, 5y annual", |b| {
-        b.iter(|| black_box(&short).price(black_box(y)))
+        b.iter(|| black_box(&short).price(black_box(y), black_box(s)))
     });
     c.bench_function("price, 30y semi-annual", |b| {
-        b.iter(|| black_box(&long).price(black_box(y)))
+        b.iter(|| black_box(&long).price(black_box(y), black_box(s)))
+    });
+    // оценка в середине жизни: часть платежей отфильтровывается
+    let mid = d(2040, 9, 1);
+    c.bench_function("price, 30y semi-annual, mid-life settlement", |b| {
+        b.iter(|| black_box(&long).price(black_box(y), black_box(mid)))
     });
 
     let bonds = [
@@ -46,25 +52,25 @@ fn bench_bonds(c: &mut Criterion) {
         ("5000y semi-annual", &longlong),
     ];
     for (name, bond) in bonds {
-        let p = bond.price(0.07);
+        let p = bond.price(0.07, s);
         c.bench_function(&format!("ytm (bisection), {name}"), |b| {
-            b.iter(|| black_box(bond).ytm_bisection(black_box(p)))
+            b.iter(|| black_box(bond).ytm_bisection(black_box(p), black_box(s)))
         });
         c.bench_function(&format!("ytm (newton), {name}"), |b| {
-            b.iter(|| black_box(bond).ytm(black_box(p)))
+            b.iter(|| black_box(bond).ytm(black_box(p), black_box(s)))
         });
     }
 
     c.bench_function("modified duration, 30y", |b| {
-        b.iter(|| black_box(&long).modified_duration(black_box(y)))
+        b.iter(|| black_box(&long).modified_duration(black_box(y), black_box(s)))
     });
     c.bench_function("convexity, 30y", |b| {
-        b.iter(|| black_box(&long).convexity(black_box(y)))
+        b.iter(|| black_box(&long).convexity(black_box(y), black_box(s)))
     });
 
     let shifts = [-300.0, -100.0, -10.0, 10.0, 100.0, 300.0];
     c.bench_function("shift table, 6 shifts, 30y", |b| {
-        b.iter(|| black_box(&long).shift_table(black_box(y), black_box(&shifts)))
+        b.iter(|| black_box(&long).shift_table(black_box(y), black_box(&shifts), black_box(s)))
     });
 }
 

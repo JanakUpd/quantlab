@@ -36,6 +36,7 @@ fn bond_b() -> Bond {
 
 // Эталонные значения посчитаны независимо (Python):
 // цена = Σ CF / (1 + y)^(дни / 365), дюрации и выпуклость — по той же схеме.
+// Если не сказано иное, settlement = дата выпуска.
 
 // ---------- Денежные потоки ----------
 
@@ -143,29 +144,33 @@ fn cashflows_rejects_maturity_not_after_issue() {
 fn bond_a_price_close_to_par() {
     // купон = доходность, но високосный 2028-й чуть сдвигает сроки платежей,
     // поэтому цена не ровно 100, а рядом
-    let p = bond_a().price(0.05);
+    let b = bond_a();
+    let p = b.price(0.05, b.issue_date);
     assert!(approx(p, 99.987876395), "price = {p}");
     assert!((p - 100.0).abs() < 0.05);
 }
 
 #[test]
 fn bond_b_price() {
-    assert!(approx(bond_b().price(0.08), 87.339681657));
+    let b = bond_b();
+    assert!(approx(b.price(0.08, b.issue_date), 87.339681657));
 }
 
 #[test]
 fn price_falls_when_yield_rises() {
     let b = bond_a();
-    assert!(b.price(0.06) < b.price(0.05));
-    assert!(b.price(0.04) > b.price(0.05));
+    let s = b.issue_date;
+    assert!(b.price(0.06, s) < b.price(0.05, s));
+    assert!(b.price(0.04, s) > b.price(0.05, s));
 }
 
 #[test]
 fn ytm_roundtrip() {
     for b in [bond_a(), bond_b()] {
+        let s = b.issue_date;
         for y in [-0.02, 0.0, 0.01, 0.05, 0.08, 0.15, 0.50] {
-            let p = b.price(y);
-            let found = b.ytm(p).expect("ytm should exist");
+            let p = b.price(y, s);
+            let found = b.ytm(p, s).expect("ytm should exist");
             assert!((found - y).abs() < 1e-9, "y={y}, found={found}");
         }
     }
@@ -173,21 +178,24 @@ fn ytm_roundtrip() {
 
 #[test]
 fn ytm_at_market_price_of_par_bond_is_near_coupon() {
-    let y = bond_a().ytm(100.0).unwrap();
+    let b = bond_a();
+    let y = b.ytm(100.0, b.issue_date).unwrap();
     assert!((y - 0.05).abs() < 1e-3, "y = {y}");
 }
 
 #[test]
 fn ytm_none_for_impossible_price() {
-    assert!(bond_a().ytm(-5.0).is_none());
+    let b = bond_a();
+    assert!(b.ytm(-5.0, b.issue_date).is_none());
 }
 
 #[test]
 fn ytm_bisection_roundtrip() {
     for b in [bond_a(), bond_b()] {
+        let s = b.issue_date;
         for y in [-0.02, 0.0, 0.01, 0.05, 0.08, 0.15, 0.50] {
-            let p = b.price(y);
-            let found = b.ytm_bisection(p).expect("ytm should exist");
+            let p = b.price(y, s);
+            let found = b.ytm_bisection(p, s).expect("ytm should exist");
             assert!((found - y).abs() < 1e-9, "y={y}, found={found}");
         }
     }
@@ -203,11 +211,12 @@ fn newton_and_bisection_agree() {
         0.06,
     );
     for b in [bond_a(), bond_b(), long] {
+        let s = b.issue_date;
         for y in [-0.02, 0.0, 0.03, 0.07, 0.15, 0.50] {
-            let p = b.price(y);
-            let n = b.ytm(p).unwrap();
-            let s = b.ytm_bisection(p).unwrap();
-            assert!((n - s).abs() < 1e-9, "y={y}: newton={n}, bisection={s}");
+            let p = b.price(y, s);
+            let n = b.ytm(p, s).unwrap();
+            let bis = b.ytm_bisection(p, s).unwrap();
+            assert!((n - bis).abs() < 1e-9, "y={y}: newton={n}, bisection={bis}");
         }
     }
 }
@@ -216,9 +225,10 @@ fn newton_and_bisection_agree() {
 fn ytm_zero_coupon() {
     // у бескупонной облигации старт Ньютона = 0, проверяем, что он всё равно сходится
     let z = Bond::zero_coupon(d(2025, 1, 1), 100.0, d(2035, 1, 1));
+    let s = z.issue_date;
     for y in [0.01, 0.05, 0.20] {
-        let p = z.price(y);
-        assert!((z.ytm(p).unwrap() - y).abs() < 1e-9);
+        let p = z.price(y, s);
+        assert!((z.ytm(p, s).unwrap() - y).abs() < 1e-9);
     }
 }
 
@@ -227,34 +237,40 @@ fn ytm_zero_coupon() {
 #[test]
 fn bond_a_durations() {
     let b = bond_a();
-    assert!(approx(b.macaulay_duration(0.05), 4.548397478));
-    assert!(approx(b.modified_duration(0.05), 4.331807122));
-    assert!(approx(b.dv01(0.05), 0.043312820));
+    let s = b.issue_date;
+    assert!(approx(b.macaulay_duration(0.05, s), 4.548397478));
+    assert!(approx(b.modified_duration(0.05, s), 4.331807122));
+    assert!(approx(b.dv01(0.05, s), 0.043312820));
 }
 
 #[test]
 fn bond_b_durations() {
     let b = bond_b();
-    assert!(approx(b.macaulay_duration(0.08), 7.474607720));
-    assert!(approx(b.modified_duration(0.08), 6.920933074));
+    let s = b.issue_date;
+    assert!(approx(b.macaulay_duration(0.08, s), 7.474607720));
+    assert!(approx(b.modified_duration(0.08, s), 6.920933074));
 }
 
 #[test]
 fn zero_coupon_macaulay_equals_time_to_maturity() {
     // 01.01.2025 → 01.01.2032 = 2556 дней (один високосный 2028-й), 2556 / 365 лет
     let z = Bond::zero_coupon(d(2025, 1, 1), 100.0, d(2032, 1, 1));
-    assert!(approx(z.macaulay_duration(0.04), 2556.0 / 365.0));
+    assert!(approx(
+        z.macaulay_duration(0.04, z.issue_date),
+        2556.0 / 365.0
+    ));
 }
 
 #[test]
 fn modified_duration_matches_numerical_derivative() {
     // dP/dy ≈ (P(y+h) - P(y-h)) / 2h  должно равняться  -D_mod * P
     for b in [bond_a(), bond_b()] {
+        let s = b.issue_date;
         let y = 0.07;
         let h = 1e-5;
-        let p = b.price(y);
-        let numerical = (b.price(y + h) - b.price(y - h)) / (2.0 * h);
-        let analytical = -b.modified_duration(y) * p;
+        let p = b.price(y, s);
+        let numerical = (b.price(y + h, s) - b.price(y - h, s)) / (2.0 * h);
+        let analytical = -b.modified_duration(y, s) * p;
         assert!(
             (numerical - analytical).abs() < 1e-4,
             "numerical={numerical}, analytical={analytical}"
@@ -265,14 +281,15 @@ fn modified_duration_matches_numerical_derivative() {
 #[test]
 fn convexity_matches_numerical_second_derivative() {
     for b in [bond_a(), bond_b()] {
+        let s = b.issue_date;
         let y = 0.07;
         let h = 1e-4;
-        let p = b.price(y);
-        let numerical = (b.price(y + h) - 2.0 * p + b.price(y - h)) / (h * h) / p;
+        let p = b.price(y, s);
+        let numerical = (b.price(y + h, s) - 2.0 * p + b.price(y - h, s)) / (h * h) / p;
         assert!(
-            (numerical - b.convexity(y)).abs() < 1e-3,
+            (numerical - b.convexity(y, s)).abs() < 1e-3,
             "numerical={numerical}, analytical={}",
-            b.convexity(y)
+            b.convexity(y, s)
         );
     }
 }
@@ -293,12 +310,14 @@ fn higher_coupon_means_lower_duration() {
         BondFrequency::Annual,
         0.10,
     );
-    assert!(high.macaulay_duration(0.05) < low.macaulay_duration(0.05));
+    let s = low.issue_date;
+    assert!(high.macaulay_duration(0.05, s) < low.macaulay_duration(0.05, s));
 }
 
 #[test]
 fn shift_table_bond_a_100bp() {
-    let row = &bond_a().shift_table(0.05, &[100.0])[0];
+    let b = bond_a();
+    let row = &b.shift_table(0.05, &[100.0], b.issue_date)[0];
     assert!((row.exact - 95.7738).abs() < 1e-4);
     assert!((row.duration_est - 95.6566).abs() < 1e-4);
     assert!((row.convexity_est - 95.7764).abs() < 1e-4);
@@ -308,7 +327,7 @@ fn shift_table_bond_a_100bp() {
 fn duration_always_underestimates_price() {
     let shifts = [-300.0, -100.0, -10.0, 10.0, 100.0, 300.0];
     for b in [bond_a(), bond_b()] {
-        for row in b.shift_table(0.05, &shifts) {
+        for row in b.shift_table(0.05, &shifts, b.issue_date) {
             assert!(row.duration_est < row.exact, "shift={}", row.shift_bp);
         }
     }
@@ -317,7 +336,8 @@ fn duration_always_underestimates_price() {
 #[test]
 fn convexity_reduces_error() {
     let shifts = [-300.0, -100.0, 100.0, 300.0];
-    for row in bond_a().shift_table(0.05, &shifts) {
+    let b = bond_a();
+    for row in b.shift_table(0.05, &shifts, b.issue_date) {
         let err_d = (row.duration_est - row.exact).abs();
         let err_c = (row.convexity_est - row.exact).abs();
         assert!(err_c < err_d, "shift={}", row.shift_bp);
@@ -327,12 +347,277 @@ fn convexity_reduces_error() {
 #[test]
 fn analytics_matches_individual_methods() {
     for b in [bond_a(), bond_b()] {
+        let s = b.issue_date;
         for y in [0.01, 0.05, 0.10] {
-            let a = b.analytics(y);
-            assert!((a.price - b.price(y)).abs() < 1e-10);
-            assert!((a.modified_duration - b.modified_duration(y)).abs() < 1e-10);
-            assert!((a.convexity - b.convexity(y)).abs() < 1e-10);
-            assert!((a.dv01 - b.dv01(y)).abs() < 1e-12);
+            let a = b.analytics(y, s);
+            assert!((a.price - b.price(y, s)).abs() < 1e-10);
+            assert!((a.modified_duration - b.modified_duration(y, s)).abs() < 1e-10);
+            assert!((a.convexity - b.convexity(y, s)).abs() < 1e-10);
+            assert!((a.dv01 - b.dv01(y, s)).abs() < 1e-12);
         }
     }
+}
+
+// ---------- Settlement внутри жизни облигации ----------
+
+#[test]
+fn settlement_on_coupon_date_excludes_that_coupon() {
+    // 15.06.2027 купон уже принадлежит продавцу: остаются 2028, 2029, 2030
+    let b = bond_a();
+    let s = d(2027, 6, 15);
+    assert!(approx(b.price(0.05, s), 99.986633725));
+    assert!(approx(b.macaulay_duration(0.05, s), 2.862150157));
+}
+
+#[test]
+fn settlement_mid_period() {
+    let b = bond_a();
+    let s = d(2027, 9, 1);
+    assert!(approx(b.price(0.05, s), 101.034587181));
+    assert!(approx(b.macaulay_duration(0.05, s), 2.648451527));
+}
+
+#[test]
+fn settlement_one_day_before_maturity() {
+    let b = bond_a();
+    let s = d(2030, 6, 14);
+    assert!(approx(b.price(0.05, s), 104.985965411));
+    // единственный платёж через 1 день → дюрация = 1/365
+    assert!(approx(b.macaulay_duration(0.05, s), 1.0 / 365.0));
+}
+
+#[test]
+#[should_panic(expected = "settlement must be before maturity")]
+fn price_panics_when_settlement_is_maturity() {
+    let b = bond_a();
+    b.price(0.05, b.maturity);
+}
+
+#[test]
+fn ytm_roundtrip_with_mid_life_settlement() {
+    for b in [bond_a(), bond_b()] {
+        let s = d(2027, 9, 1);
+        for y in [-0.02, 0.0, 0.05, 0.15, 0.50] {
+            let p = b.price(y, s);
+            let found = b.ytm(p, s).expect("ytm should exist");
+            assert!((found - y).abs() < 1e-9, "y={y}, found={found}");
+        }
+    }
+}
+
+#[test]
+fn analytics_matches_methods_with_mid_life_settlement() {
+    let b = bond_b();
+    let s = d(2029, 3, 20);
+    let a = b.analytics(0.07, s);
+    assert!((a.price - b.price(0.07, s)).abs() < 1e-10);
+    assert!((a.macaulay_duration - b.macaulay_duration(0.07, s)).abs() < 1e-10);
+    assert!((a.convexity - b.convexity(0.07, s)).abs() < 1e-10);
+}
+
+// ---------- НКД (accrued interest) ----------
+
+#[test]
+fn accrued_is_zero_on_issue_date() {
+    for b in [bond_a(), bond_b()] {
+        assert_eq!(b.accrued(b.issue_date), 0.0);
+    }
+}
+
+#[test]
+fn accrued_is_zero_on_coupon_date() {
+    // купон в день settlement уже принадлежит продавцу
+    assert_eq!(bond_a().accrued(d(2027, 6, 15)), 0.0);
+    assert_eq!(bond_b().accrued(d(2030, 12, 15)), 0.0);
+}
+
+#[test]
+fn accrued_is_zero_for_zero_coupon() {
+    let z = Bond::zero_coupon(d(2025, 1, 1), 100.0, d(2030, 1, 1));
+    assert_eq!(z.accrued(d(2026, 1, 1)), 0.0);
+    assert_eq!(z.accrued(d(2029, 12, 31)), 0.0);
+}
+
+#[test]
+fn accrued_is_zero_at_or_after_maturity() {
+    let b = bond_a();
+    assert_eq!(b.accrued(b.maturity), 0.0);
+    assert_eq!(b.accrued(d(2031, 1, 1)), 0.0);
+}
+
+#[test]
+fn accrued_semi_annual_mid_period() {
+    // 15.06.2025 → 15.12.2025 = 183 дня, прошло 78 дней, купон 3.0
+    assert!(approx(bond_b().accrued(d(2025, 9, 1)), 3.0 * 78.0 / 183.0));
+}
+
+#[test]
+fn accrued_annual_uses_actual_period_length() {
+    // период 15.06.2027 → 15.06.2028 содержит 29 февраля: 366 дней
+    assert!(approx(bond_a().accrued(d(2027, 9, 1)), 5.0 * 78.0 / 366.0));
+}
+
+#[test]
+fn accrued_day_before_coupon_is_almost_full_coupon() {
+    let a = bond_a().accrued(d(2027, 6, 14));
+    assert!(a < 5.0 && a > 4.98, "accrued = {a}");
+    let b = bond_b().accrued(d(2025, 12, 14));
+    assert!(b < 3.0 && b > 2.98, "accrued = {b}");
+}
+
+#[test]
+fn accrued_grows_within_period_and_resets_at_coupon() {
+    let b = bond_b();
+    let mut prev = 0.0;
+    let mut day = d(2025, 6, 16);
+    while day < d(2025, 12, 15) {
+        let a = b.accrued(day);
+        assert!(a > prev, "{day}: {a} <= {prev}");
+        prev = a;
+        day = day.succ_opt().unwrap();
+    }
+    assert_eq!(b.accrued(d(2025, 12, 15)), 0.0);
+}
+
+#[test]
+fn accrued_first_period_counts_from_issue_date() {
+    // выпуск 01.09.2025, первый купон 15.12.2025: НКД растёт от даты выпуска
+    let b = Bond::frequent(
+        d(2025, 9, 1),
+        1000.0,
+        d(2027, 6, 15),
+        BondFrequency::SemiAnnual,
+        0.10,
+    );
+    assert_eq!(b.accrued(d(2025, 9, 1)), 0.0);
+    let a = b.accrued(d(2025, 10, 1)); // 30 из 105 дней
+    assert!(approx(a, 50.0 * 30.0 / 105.0), "accrued = {a}");
+}
+
+#[test]
+fn accrued_date_based_is_act_365() {
+    let issue = d(2025, 1, 1);
+    let b = Bond::date_based(
+        issue,
+        1000.0,
+        issue + chrono::Days::new(3 * 182),
+        NonZeroU16::new(182).unwrap(),
+        0.071,
+    );
+    // 18 дней после первого купона (issue + 182)
+    let s = issue + chrono::Days::new(182 + 18);
+    assert!(approx(b.accrued(s), 1000.0 * 0.071 * 18.0 / 365.0));
+    // в день купона 0
+    assert_eq!(b.accrued(issue + chrono::Days::new(182)), 0.0);
+}
+
+#[test]
+fn accrued_end_of_month_schedule() {
+    // купоны 28.02 / 31.08: период 28.02.2029 → 31.08.2029 = 184 дня
+    let b = Bond::frequent(
+        d(2029, 1, 1),
+        1000.0,
+        d(2030, 8, 31),
+        BondFrequency::SemiAnnual,
+        0.04,
+    );
+    let a = b.accrued(d(2029, 5, 31)); // 92 дня из 184 = ровно половина купона 20
+    assert!(approx(a, 10.0), "accrued = {a}");
+}
+
+#[test]
+fn accrued_scales_with_face_and_rate() {
+    let mk = |face, rate| {
+        Bond::frequent(
+            d(2025, 6, 15),
+            face,
+            d(2030, 6, 15),
+            BondFrequency::Annual,
+            rate,
+        )
+    };
+    let s = d(2027, 9, 1);
+    let base = mk(100.0, 0.05).accrued(s);
+    assert!(approx(mk(1000.0, 0.05).accrued(s), 10.0 * base));
+    assert!(approx(mk(100.0, 0.10).accrued(s), 2.0 * base));
+}
+
+// ---------- Чистая цена ----------
+
+#[test]
+fn clean_price_bond_a_mid_period() {
+    // грязная 101.034587181 − НКД 5·78/366
+    let b = bond_a();
+    let s = d(2027, 9, 1);
+    assert!(approx(b.clean_price(0.05, s), 99.969013411));
+    assert!(approx(
+        b.price(0.05, s) - b.clean_price(0.05, s),
+        b.accrued(s)
+    ));
+}
+
+#[test]
+fn clean_equals_dirty_on_coupon_date_and_at_issue() {
+    for b in [bond_a(), bond_b()] {
+        for s in [b.issue_date, d(2027, 6, 15)] {
+            assert_eq!(b.clean_price(0.06, s), b.price(0.06, s));
+        }
+    }
+}
+
+#[test]
+fn clean_equals_dirty_for_zero_coupon() {
+    let z = Bond::zero_coupon(d(2025, 1, 1), 100.0, d(2030, 1, 1));
+    let s = d(2027, 3, 3);
+    assert_eq!(z.clean_price(0.05, s), z.price(0.05, s));
+}
+
+#[test]
+fn clean_is_below_dirty_strictly_inside_a_period() {
+    for b in [bond_a(), bond_b()] {
+        let s = d(2027, 9, 1);
+        assert!(b.clean_price(0.05, s) < b.price(0.05, s));
+    }
+}
+
+#[test]
+fn clean_price_is_continuous_across_coupon_date() {
+    // грязная цена падает на величину купона в день выплаты, чистая почти не прыгает
+    let b = bond_a();
+    let y = 0.05;
+    let (before, after) = (d(2027, 6, 14), d(2027, 6, 15));
+    let dirty_jump = b.price(y, before) - b.price(y, after);
+    let clean_jump = (b.clean_price(y, before) - b.clean_price(y, after)).abs();
+    assert!(dirty_jump > 4.0, "dirty jump = {dirty_jump}");
+    assert!(clean_jump < 0.05, "clean jump = {clean_jump}");
+}
+
+#[test]
+fn ytm_from_clean_roundtrip() {
+    let dates = [d(2025, 6, 15), d(2025, 9, 1), d(2027, 9, 1), d(2029, 3, 20)];
+    for b in [bond_a(), bond_b()] {
+        for s in dates {
+            for y in [-0.02, 0.0, 0.05, 0.12, 0.40] {
+                let clean = b.clean_price(y, s);
+                let found = b.ytm_from_clean(clean, s).expect("ytm should exist");
+                assert!((found - y).abs() < 1e-9, "s={s}, y={y}, found={found}");
+            }
+        }
+    }
+}
+
+#[test]
+fn ytm_from_clean_differs_from_ytm_on_same_number() {
+    // тот же числовой ввод как чистая цена даёт большую цену (clean + НКД), т.е. меньшую доходность
+    let b = bond_a();
+    let s = d(2027, 9, 1);
+    let as_dirty = b.ytm(100.0, s).unwrap();
+    let as_clean = b.ytm_from_clean(100.0, s).unwrap();
+    assert!(as_clean < as_dirty);
+}
+
+#[test]
+fn ytm_from_clean_none_for_impossible_price() {
+    let b = bond_a();
+    assert!(b.ytm_from_clean(-5.0, d(2027, 9, 1)).is_none());
 }
