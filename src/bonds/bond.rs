@@ -1,9 +1,33 @@
+use crate::bonds::bond::BondError::DateOutOfRange;
+use chrono::{Days, Months, NaiveDate};
+use std::num::NonZeroU16;
+
+#[derive(Debug, Clone, PartialEq, Copy, Eq)]
+pub enum BondFrequency {
+    Annual = 1,
+    SemiAnnual = 2,
+    Quarterly = 4,
+    Monthly = 12,
+}
+#[derive(Debug, Clone, PartialEq)]
+pub enum CouponRule {
+    ZeroCoupon,
+    Frequent {
+        frequency: BondFrequency,
+        rate: f64,
+    },
+    DateBased {
+        date_interval: NonZeroU16,
+        rate: f64,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Bond {
+    pub issue_date: NaiveDate,
     pub face: f64,
-    pub coupon_rate: f64,
-    pub maturity: f64,
-    pub freq: u32,
+    pub maturity: NaiveDate,
+    pub nature: CouponRule,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -23,35 +47,122 @@ pub struct BondAnalytics {
     pub convexity: f64,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum BondError {
+    DateOutOfRange,
+    MaturityBeforeIssue,
+}
+
 impl Bond {
-    pub fn new(face: f64, coupon_rate: f64, maturity: f64, freq: u32) -> Self {
+    pub fn zero_coupon(issue_date: NaiveDate, face: f64, maturity: NaiveDate) -> Self {
         Self {
+            issue_date,
             face,
-            coupon_rate,
             maturity,
-            freq,
+            nature: CouponRule::ZeroCoupon,
         }
     }
 
-    fn cashflow_iter(&self) -> impl DoubleEndedIterator<Item = (f64, f64)> + '_ {
-        let n = (self.maturity * self.freq as f64).round() as usize;
-        let coupon = self.coupon_rate * self.face / self.freq as f64;
-        (1..n)
-            .map(move |x| (x as f64 / self.freq as f64, coupon))
-            .chain([(n as f64 / self.freq as f64, coupon + self.face)])
+    pub fn frequent(
+        issue_date: NaiveDate,
+        face: f64,
+        maturity: NaiveDate,
+        frequency: BondFrequency,
+        rate: f64,
+    ) -> Self {
+        Self {
+            issue_date,
+            face,
+            maturity,
+            nature: CouponRule::Frequent { frequency, rate },
+        }
     }
 
-    pub fn cashflows(&self) -> Vec<(f64, f64)> {
-        self.cashflow_iter().collect()
+    pub fn date_based(
+        issue_date: NaiveDate,
+        face: f64,
+        maturity: NaiveDate,
+        date_interval: NonZeroU16,
+        rate: f64,
+    ) -> Self {
+        Self {
+            issue_date,
+            face,
+            maturity,
+            nature: CouponRule::DateBased {
+                date_interval,
+                rate,
+            },
+        }
+    }
+
+    fn get_rate(&self) -> f64 {
+        match self.nature {
+            CouponRule::ZeroCoupon => 0.0,
+            CouponRule::Frequent { rate, .. } => rate,
+            CouponRule::DateBased { rate, .. } => rate,
+        }
+    }
+
+    pub fn cashflows(&self) -> Result<Vec<(NaiveDate, f64)>, BondError> {
+        if self.maturity <= self.issue_date {
+            return Err(BondError::MaturityBeforeIssue);
+        }
+        match self.nature {
+            CouponRule::Frequent { frequency, rate } => {
+                let freq = frequency as u8 as f64;
+                let period = 12 / frequency as u32;
+                let coupon = rate * self.face / freq;
+                let mut ans = vec![(self.maturity, self.face + coupon); 1];
+                let mut i;
+                let mut k = 1;
+                loop {
+                    i = self
+                        .maturity
+                        .checked_sub_months(Months::new(period * k))
+                        .ok_or(DateOutOfRange)?;
+                    if i <= self.issue_date {
+                        break;
+                    }
+                    ans.push((i, coupon));
+                    k += 1;
+                }
+                ans.reverse();
+                Ok(ans)
+            }
+            CouponRule::DateBased {
+                date_interval,
+                rate,
+            } => {
+                let period = Days::new(date_interval.get() as u64);
+                let coupon = rate * self.face * u16::from(date_interval) as f64 / 365.0;
+                let mut ans = vec![(self.maturity, self.face + coupon); 1];
+                let mut i = self
+                    .maturity
+                    .checked_sub_days(period)
+                    .ok_or(DateOutOfRange)?;
+                while i > self.issue_date {
+                    ans.push((i, coupon));
+                    i = i.checked_sub_days(period).ok_or(DateOutOfRange)?;
+                }
+                ans.reverse();
+                Ok(ans)
+            }
+            CouponRule::ZeroCoupon => Ok(vec![(self.maturity, self.face); 1]),
+        }
+    }
+    /// TODO: вернуть Result вместо expect.
+    fn flows(&self) -> Vec<(f64, f64)> {
+        self.cashflows()
+            .expect("invalid bond dates")
+            .into_iter()
+            .map(|(d, cf)| ((d - self.issue_date).num_days() as f64 / 365.0, cf))
+            .collect()
     }
 
     pub fn price(&self, rate: f64) -> f64 {
-        let v = 1.0 / self.base(rate);
-        let mut res = 0.0;
-        for (_, cf) in self.cashflow_iter().rev() {
-            res = res * v + cf;
-        }
-        res * v
+        let b = self.base(rate);
+        self.flows().iter().map(|&(t, cf)| cf / b.powf(t)).sum()
     }
 
     pub fn ytm_bisection(&self, market_price: f64) -> Option<f64> {
@@ -80,7 +191,7 @@ impl Bond {
         {
             return None;
         }
-        let mut y = self.coupon_rate;
+        let mut y = self.get_rate();
         let mut prev_y;
         let mut iter = 0;
         loop {
@@ -98,16 +209,13 @@ impl Bond {
     }
 
     fn base(&self, rate: f64) -> f64 {
-        1.0 + rate / self.freq as f64
+        1.0 + rate
     }
 
+    /// Σ t · PV(t)
     fn pv_weighted_time(&self, rate: f64) -> f64 {
-        let mut res = 0.0;
-        let v = 1.0 / self.base(rate);
-        for (t, cf) in self.cashflow_iter().rev() {
-            res = res * v + cf * t
-        }
-        res * v
+        let b = self.base(rate);
+        self.flows().iter().map(|&(t, cf)| t * cf / b.powf(t)).sum()
     }
 
     pub fn macaulay_duration(&self, rate: f64) -> f64 {
@@ -126,14 +234,15 @@ impl Bond {
         -self.modified_duration(rate) * delta_rate
     }
 
+    /// Σ t(t+1) · PV(t) / (1+y)² / цена
     pub fn convexity(&self, rate: f64) -> f64 {
-        let mut res = 0.0;
-        let v = 1.0 / self.base(rate);
-        let m = self.freq as f64;
-        for (t, cf) in self.cashflow_iter().rev() {
-            res = res * v + t * (t + 1.0 / m) * cf;
-        }
-        res * v * v * v / self.price(rate)
+        let b = self.base(rate);
+        let s: f64 = self
+            .flows()
+            .iter()
+            .map(|&(t, cf)| t * (t + 1.0) * cf / b.powf(t))
+            .sum();
+        s / (b * b) / self.price(rate)
     }
 
     pub fn price_estimate_duration(&self, rate: f64, delta_rate: f64) -> f64 {
@@ -165,26 +274,22 @@ impl Bond {
     }
 
     pub fn analytics(&self, rate: f64) -> BondAnalytics {
-        let mut pr = 0.0;
-        let mut wt = 0.0;
-        let mut cv = 0.0;
-        let v = 1.0 / self.base(rate);
-        let m = self.freq as f64;
-        for (t, cf) in self.cashflow_iter().rev() {
-            pr = pr * v + cf;
-            wt = wt * v + cf * t;
-            cv = cv * v + t * (t + 1.0 / m) * cf;
+        let b = self.base(rate);
+        let (mut pr, mut wt, mut cv) = (0.0, 0.0, 0.0);
+        for (t, cf) in self.flows() {
+            let pv = cf / b.powf(t);
+            pr += pv;
+            wt += t * pv;
+            cv += t * (t + 1.0) * pv;
         }
-        pr *= v;
-        wt *= v;
         let mac_d = wt / pr;
-        let mod_d = mac_d * v;
+        let mod_d = mac_d / b;
         BondAnalytics {
             price: pr,
             macaulay_duration: mac_d,
             modified_duration: mod_d,
-            dv01: wt * v * 0.0001,
-            convexity: cv * v.powi(3) / pr,
+            dv01: wt / b * 0.0001,
+            convexity: cv / (b * b) / pr,
         }
     }
 }

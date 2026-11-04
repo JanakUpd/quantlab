@@ -1,12 +1,37 @@
+use chrono::NaiveDate;
 use criterion::{Criterion, criterion_group, criterion_main};
-use quantlab::bonds::Bond;
+use quantlab::bonds::{Bond, BondFrequency};
 use std::hint::black_box;
 
+fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+    NaiveDate::from_ymd_opt(y, m, day).unwrap()
+}
+
 fn bench_bonds(c: &mut Criterion) {
-    let short = Bond::new(100.0, 0.05, 5.0, 1);
-    let long = Bond::new(100.0, 0.06, 30.0, 2);
-    let longlong = Bond::new(100.0, 0.06, 5000.0, 2);
+    let issue = d(2025, 6, 15);
+    let short = Bond::frequent(issue, 100.0, d(2030, 6, 15), BondFrequency::Annual, 0.05);
+    let long = Bond::frequent(
+        issue,
+        100.0,
+        d(2055, 6, 15),
+        BondFrequency::SemiAnnual,
+        0.06,
+    );
+    let longlong = Bond::frequent(
+        issue,
+        100.0,
+        d(7025, 6, 15),
+        BondFrequency::SemiAnnual,
+        0.06,
+    );
     let y = 0.05;
+
+    c.bench_function("cashflows, 5y annual", |b| {
+        b.iter(|| black_box(&short).cashflows())
+    });
+    c.bench_function("cashflows, 30y semi-annual", |b| {
+        b.iter(|| black_box(&long).cashflows())
+    });
 
     c.bench_function("price, 5y annual", |b| {
         b.iter(|| black_box(&short).price(black_box(y)))

@@ -1,8 +1,10 @@
+use chrono::NaiveDate;
 use clap::{Parser, Subcommand};
-use quantlab::bonds::Bond;
+use quantlab::bonds::{Bond, BondFrequency};
 use quantlab::options::analytic::black_scholes;
 use quantlab::options::monte_carlo::*;
 use quantlab::options::option::EuropeanOption;
+use std::num::NonZeroU16;
 use std::time::Instant;
 
 #[derive(Parser)]
@@ -31,12 +33,21 @@ enum Command {
     Bond {
         #[arg(long, default_value_t = 100.0)]
         face: f64,
+        /// Annual coupon rate; omit for a zero-coupon bond
         #[arg(long)]
-        coupon: f64,
+        coupon: Option<f64>,
+        /// Issue date, YYYY-MM-DD
         #[arg(long)]
-        maturity: f64,
-        #[arg(long, default_value_t = 1)]
+        issue: NaiveDate,
+        /// Maturity date, YYYY-MM-DD
+        #[arg(long)]
+        maturity: NaiveDate,
+        /// Coupons per year: 1, 2, 4 or 12
+        #[arg(long, default_value_t = 1, conflicts_with = "days")]
         freq: u32,
+        /// Coupon period in days (e.g. 182 for OFZ) instead of --freq
+        #[arg(long)]
+        days: Option<NonZeroU16>,
         #[arg(
             long = "yield",
             conflicts_with = "price",
@@ -76,6 +87,10 @@ fn run_option(p: EuropeanOption, paths: usize) {
 }
 
 fn run_bond(bond: Bond, yld: Option<f64>, price: Option<f64>, shifts: &[f64]) {
+    if let Err(e) = bond.cashflows() {
+        eprintln!("error: invalid bond dates: {e:?}");
+        std::process::exit(1);
+    }
     let yld = match (yld, price) {
         (Some(y), _) => y,
         (None, Some(p)) => bond.ytm(p).unwrap_or_else(|| {
@@ -85,11 +100,8 @@ fn run_bond(bond: Bond, yld: Option<f64>, price: Option<f64>, shifts: &[f64]) {
         (None, None) => unreachable!("clap requires --yield or --price"),
     };
     println!(
-        "Bond: face {}, coupon {:.2}%, maturity {:.1}y, freq {}",
-        bond.face,
-        bond.coupon_rate * 100.0,
-        bond.maturity,
-        bond.freq
+        "Bond: face {}, issued {}, matures {}, {:?}",
+        bond.face, bond.issue_date, bond.maturity, bond.nature
     );
     println!("{:<20}{:>9.4}%", "Yield:", yld * 100.0);
     println!("{:<20}{:>10.4}", "Price:", bond.price(yld));
@@ -145,11 +157,32 @@ fn main() {
         Command::Bond {
             face,
             coupon,
+            issue,
             maturity,
             freq,
+            days,
             yld,
             price,
             shifts,
-        } => run_bond(Bond::new(face, coupon, maturity, freq), yld, price, &shifts),
+        } => {
+            let bond = match (coupon, days) {
+                (None, _) => Bond::zero_coupon(issue, face, maturity),
+                (Some(rate), Some(d)) => Bond::date_based(issue, face, maturity, d, rate),
+                (Some(rate), None) => {
+                    let frequency = match freq {
+                        1 => BondFrequency::Annual,
+                        2 => BondFrequency::SemiAnnual,
+                        4 => BondFrequency::Quarterly,
+                        12 => BondFrequency::Monthly,
+                        other => {
+                            eprintln!("error: --freq must be 1, 2, 4 or 12, got {other}");
+                            std::process::exit(1);
+                        }
+                    };
+                    Bond::frequent(issue, face, maturity, frequency, rate)
+                }
+            };
+            run_bond(bond, yld, price, &shifts)
+        }
     }
 }
