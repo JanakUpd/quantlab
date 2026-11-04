@@ -343,7 +343,7 @@ impl Bond {
             .iter()
             .map(|&(d, _)| d)
             .filter(|&d| d <= settlement)
-            .last()
+            .next_back()
             .unwrap_or(self.issue_date);
         let next = cfs
             .iter()
