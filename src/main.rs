@@ -105,16 +105,16 @@ fn run_bond(
     if let Err(e) = bond.cashflows() {
         fail(format!("invalid bond dates: {e:?}"));
     }
-    if settlement < bond.issue_date {
+    if settlement < bond.get_issue_date() {
         fail(format!(
             "settlement {settlement} is before issue date {}",
-            bond.issue_date
+            bond.get_issue_date()
         ));
     }
-    if settlement >= bond.maturity {
+    if settlement >= bond.get_maturity() {
         fail(format!(
             "settlement {settlement} must be before maturity {}",
-            bond.maturity
+            bond.get_maturity()
         ));
     }
 
@@ -131,7 +131,10 @@ fn run_bond(
 
     println!(
         "Bond: face {}, issued {}, matures {}, {:?}",
-        bond.face, bond.issue_date, bond.maturity, bond.nature
+        bond.get_face(),
+        bond.get_issue_date(),
+        bond.get_maturity(),
+        bond.get_nature()
     );
     println!("Settlement: {settlement}");
     println!("{:<20}{:>9.4}%", "Yield:", yld * 100.0);
