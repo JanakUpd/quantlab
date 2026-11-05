@@ -13,7 +13,8 @@ A quantitative finance toolkit in Rust: European option pricing (closed-form Bla
 - **Valuation on any date**: price a bond at its issue or on any later settlement date, with accrued interest (НКД) and clean/dirty price
 - **Bond analytics**: price, yield to maturity (from a dirty or a clean price), Macaulay and modified duration, DV01, convexity
 - **Rate-shift sensitivity table** comparing exact repricing with duration and duration + convexity estimates
-- **Tests** against independently computed reference values, put–call parity, numerical derivatives and statistical agreement between methods
+- **Optional cash-flow cache** ([moka](https://github.com/moka-rs/moka)) for repeated valuations of the same bond on the same dates; off by default
+- **Tests** against independently computed reference values, put–call parity, numerical derivatives, statistical agreement between methods and two real bonds checked against a broker app
 - **Benchmarks** with criterion
 
 ## Options
@@ -171,7 +172,9 @@ The frequent-coupon formula is actual/actual by period, so accrued interest reac
 
 **Clean and dirty price.** $P_{clean} = P_{dirty} - \text{accrued}$. The dirty price drops by a coupon on every payment date, the clean price does not, which is why markets quote it. `ytm_from_clean` converts a quote to a dirty price before solving for yield, so a quoted price is not mistaken for a full one.
 
-**Current limitations.** The day count is actual/365 (actual/actual by period for accrued interest on frequent coupons) and there are no holiday calendars. A first coupon period shorter than the regular one still pays a full coupon. Pricing methods panic if the settlement date is not before maturity; the CLI checks this up front.
+**Cash-flow cache.** By default every pricing call computes the payment schedule from scratch. Methods that need the schedule several times (yield, durations, the shift table) compute it once per call and pass it down as a slice. For workloads that value the same bond on the same dates many times, `Bond::with_cache(capacity)` adds a bounded cache of discounted-time cash flows keyed by settlement date. Results are identical with and without it; see [Performance](#performance) for when it pays off.
+
+**Current limitations.** The day count is actual/365 (actual/actual by period for accrued interest on frequent coupons), there are no holiday calendars, and the settlement date is taken as given: there is no business-day or T+1 convention. A first coupon period shorter than the regular one still pays a full coupon. Pricing methods panic if the settlement date is not before maturity; the CLI checks this up front.
 
 ## As a library
 
@@ -196,6 +199,9 @@ let accrued = bond.accrued(settlement);
 let clean = bond.clean_price(0.05, settlement);
 let ytm = bond.ytm_from_clean(99.969, settlement); // Option<f64>
 let duration = bond.modified_duration(0.05, settlement);
+
+// Optional: cache cash flows per settlement date (up to 1024 dates)
+let cached = bond.clone().with_cache(1024);
 ```
 
 `Bond::date_based` and `Bond::zero_coupon` construct the other two kinds.
@@ -226,7 +232,9 @@ benches/
 
 Measured with [criterion](https://github.com/bheisler/criterion.rs).
 
-Options, ATM call, `cargo bench --bench pricing` on Ryzen 7 9700X:
+Numbers below come from a desktop Ryzen 7 9700X; run-to-run noise is around ±10%, so small differences should not be over-read.
+
+Options, ATM call, `cargo bench --bench pricing` (measured on Windows):
 
 | Benchmark | Time | Throughput |
 |-----------|-----:|-----------:|
@@ -238,30 +246,42 @@ Options, ATM call, `cargo bench --bench pricing` on Ryzen 7 9700X:
 
 The closed-form formula is about 225 000× faster than a 1M-path simulation, which is why Monte Carlo is reserved for payoffs without an analytic solution.
 
-Bonds, `cargo bench --bench bonds` on Ryzen 7 9700X (settlement on the issue date):
+Bonds, `cargo bench --bench bonds` (measured on Fedora Linux, settlement on the issue date unless noted). The bond is built once and reused, with the cash-flow cache off and on:
 
-| Benchmark | Time |
-|-----------|-----:|
-| Cash-flow schedule, 30y semi-annual (60 payments) | 456 ns |
-| Price, 5y annual (5 payments) | 160 ns |
-| Price, 30y semi-annual (60 payments) | 1.13 µs |
-| Modified duration, 30y | 2.25 µs |
-| Convexity, 30y | 2.25 µs |
-| Shift table, 6 shifts, 30y | 8.13 µs |
+| Benchmark | No cache | Cached |
+|-----------|---------:|-------:|
+| Cash-flow schedule, 30y semi-annual (60 payments) | 440 ns | — |
+| Price, 5y annual (5 payments) | 152 ns | 113 ns |
+| Price, 30y semi-annual (60 payments) | 1.09 µs | 443 ns |
+| Price, 30y, mid-life settlement | 909 ns | 262 ns |
+| Modified duration, 30y | 1.47 µs | 813 ns |
+| Convexity, 30y | 1.46 µs | 811 ns |
+| Analytics (price, durations, convexity in one pass), 30y | 1.14 µs | 486 ns |
+| Shift table, 6 shifts, 30y | 4.06 µs | 2.77 µs |
 
-The shift table computes price, duration and convexity once in a single pass (`Bond::analytics`), then reprices only the shifted yields.
+The shift table computes price, duration and convexity once in a single pass (`Bond::analytics`), then reprices only the shifted yields from one shared schedule.
 
-Yield solvers, same bond priced at 7%:
+Yield solvers, same bond priced at 7% (no cache):
 
 | Bond | Payments | Bisection | Newton | Speedup |
 |------|---------:|----------:|-------:|--------:|
-| 5y annual | 5 | 7.24 µs | 1.92 µs | 3.8× |
-| 30y semi-annual | 60 | 50.6 µs | 13.5 µs | 3.7× |
-| 5000y semi-annual | 10 000 | 7.41 ms | 1.96 ms | 3.8× |
+| 5y annual | 5 | 2.13 µs | 557 ns | 3.8× |
+| 30y semi-annual | 60 | 17.8 µs | 5.22 µs | 3.4× |
+| 5000y semi-annual | 10 000 | 2.98 ms | 947 µs | 3.1× |
 
-Bisection takes about 45 iterations; Newton needs far fewer.
+Bisection takes about 45 iterations; Newton needs far fewer. The solvers build the cash flows once and then iterate over a slice, so a cache saves only about 0.6 µs per call for the 30-year bond (5.22 → 4.51 µs); almost all of the time is the `powf` in the iterations.
 
-These numbers are for a date-aware model: every call rebuilds the payment schedule (about 40% of the price time for the 30-year bond) and discounts each payment with `powf`. An earlier version that assumed equally spaced payments in whole years was roughly an order of magnitude faster, because it needed no dates and no allocation; it was a special case, not a comparable model. Computing the schedule once and reusing it across calls is the next planned optimization.
+**When the cache pays off.** Creating a cache costs about 3.3 µs and dropping it more, and the first call is a miss that costs extra:
+
+| Cold benchmark (fresh bond per call) | No cache | Cached |
+|--------------------------------------|---------:|-------:|
+| Construct, 30y semi-annual | 6 ns | 3.3 µs |
+| First price, 30y semi-annual | 1.10 µs | 1.78 µs |
+| Construct + price + drop, 30y semi-annual | 1.11 µs | 10–16 µs |
+
+Against a saving of roughly 0.6 µs per price or yield call (about 1.3 µs for a shift table), the cache breaks even after a few tens of repeated valuations of the same bond on the same date, and sooner for the heavier methods. For a single valuation, leave it off.
+
+These numbers are for a date-aware model that discounts each payment with `powf`. An earlier version that assumed equally spaced payments in whole years was roughly an order of magnitude faster, because it needed no dates and no allocation; it was a special case, not a comparable model.
 
 ## Testing
 
@@ -288,11 +308,14 @@ Bonds:
 - zero-coupon Macaulay duration equals the time to maturity in days / 365; higher coupon means lower duration
 - the duration-only estimate always undershoots the exact price, and convexity reduces the error
 - Newton and bisection agree on yield to 1e-9 across zero, negative and high yields
+- a real ОФЗ-ПД checked against a broker app quote (clean price 842, accrued interest 5.7 ₽, yield 16.65%): the 182-day schedule hits the real coupon date, accrued interest and yield match to the app's rounding
+- a real corporate bond with 30-day coupons and a fixed ruble coupon, checked the same way (accrued interest 6.09 ₽, yield 16.04%); the coupon rate has to be taken from the ruble amount, because the percentage shown by the app is rounded
 
 ## Roadmap
 
-- [ ] Check prices and yields against quotes of real bonds
-- [ ] Compute the cash-flow schedule once and reuse it across calls
+- [ ] Check a real bond with calendar-month coupons (`Frequent`); the real-bond checks so far cover `DateBased`
+- [ ] Check prices and yields on a larger set of bonds with a script over market data
+- [ ] Faster yield solver: one pass for price and weighted time, cheaper powers
 - [ ] Return `Result` from pricing instead of panicking on invalid dates
 - [ ] Proportional coupon for a shortened first period
 - [ ] Amortizing and floating-rate bonds
@@ -302,6 +325,8 @@ Bonds:
 - [ ] Greeks, analytic and via finite differences
 - [ ] Implied volatility solver
 - [ ] Binomial tree for American options
+- [x] Bonds: cash flows computed once per call, plus an optional cache for repeated valuations
+- [x] Bonds: yield and accrued interest checked against a real ОФЗ and a real corporate bond
 - [x] Bonds: valuation on an arbitrary settlement date
 - [x] Bonds: accrued interest, clean and dirty price
 - [x] Bonds: calendar dates, month-based and day-based coupon schedules, zero-coupon bonds
