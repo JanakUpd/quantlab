@@ -1,4 +1,3 @@
-use crate::bonds::bond::BondError::DateOutOfRange;
 use chrono::{Days, Months, NaiveDate};
 use moka::sync::Cache;
 use std::num::NonZeroU16;
@@ -58,9 +57,51 @@ pub enum BondError {
     DateOutOfRange,
     MaturityBeforeIssue,
     MaturityBeforeSettlement,
+    InvalidMarketPrice,
+    NoConvergence,
+    IndefinitePriceCalculated,
+    InvalidRate,
+}
+
+impl std::fmt::Display for BondError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let msg = match self {
+            BondError::DateOutOfRange => "date is out of the supported range",
+            BondError::MaturityBeforeIssue => "maturity must be after the issue date",
+            BondError::MaturityBeforeSettlement => "settlement must be before maturity",
+            BondError::InvalidMarketPrice => {
+                "market price is outside the range matched by any yield in [-99.9%, 500%]"
+            }
+            BondError::NoConvergence => "yield solver did not converge",
+            BondError::IndefinitePriceCalculated => "price function calculated indefinite result",
+            BondError::InvalidRate => "rate must be finite and greater than -100%",
+        };
+        f.write_str(msg)
+    }
+}
+
+impl std::error::Error for BondError {}
+
+impl From<Arc<BondError>> for BondError {
+    fn from(e: Arc<BondError>) -> Self {
+        (*e).clone()
+    }
 }
 
 impl Bond {
+    fn validate_rate(rate: f64) -> Result<(), BondError> {
+        if !rate.is_finite() || rate <= -1.0 {
+            return Err(BondError::InvalidRate);
+        }
+        Ok(())
+    }
+
+    fn validate_market_price(price: f64) -> Result<(), BondError> {
+        if !price.is_finite() {
+            return Err(BondError::InvalidMarketPrice);
+        }
+        Ok(())
+    }
     pub fn get_issue_date(&self) -> NaiveDate {
         self.issue_date
     }
@@ -151,7 +192,7 @@ impl Bond {
                     i = self
                         .maturity
                         .checked_sub_months(Months::new(period * k))
-                        .ok_or(DateOutOfRange)?;
+                        .ok_or(BondError::DateOutOfRange)?;
                     if i <= self.issue_date {
                         break;
                     }
@@ -171,10 +212,12 @@ impl Bond {
                 let mut i = self
                     .maturity
                     .checked_sub_days(period)
-                    .ok_or(DateOutOfRange)?;
+                    .ok_or(BondError::DateOutOfRange)?;
                 while i > self.issue_date {
                     ans.push((i, coupon));
-                    i = i.checked_sub_days(period).ok_or(DateOutOfRange)?;
+                    i = i
+                        .checked_sub_days(period)
+                        .ok_or(BondError::DateOutOfRange)?;
                 }
                 ans.reverse();
                 Ok(ans)
@@ -190,7 +233,7 @@ impl Bond {
         }
     }
 
-    fn compute_flows(&self, settlement: NaiveDate) -> Result<Arc<Vec<(f64, f64)>>, BondError> {
+    fn compute_flows(&self, settlement: NaiveDate) -> Result<Flows, BondError> {
         if self.maturity <= settlement {
             return Err(BondError::MaturityBeforeSettlement);
         }
@@ -207,7 +250,7 @@ impl Bond {
         &self,
         settlement: NaiveDate,
         cfs: &[(NaiveDate, f64)],
-    ) -> Result<Arc<Vec<(f64, f64)>>, BondError> {
+    ) -> Result<Flows, BondError> {
         if self.maturity <= settlement {
             return Err(BondError::MaturityBeforeSettlement);
         }
@@ -219,13 +262,14 @@ impl Bond {
         ))
     }
 
-    pub fn price(&self, rate: f64, settlement: NaiveDate) -> f64 {
-        self.price_from_flow(
-            rate,
-            self.flows(settlement)
-                .expect("settlement must be before maturity")
-                .as_slice(),
-        )
+    pub fn price(&self, rate: f64, settlement: NaiveDate) -> Result<f64, BondError> {
+        Self::validate_rate(rate)?;
+        let res = self.price_from_flow(rate, self.flows(settlement)?.as_slice());
+        if res.is_finite() {
+            Ok(res)
+        } else {
+            Err(BondError::IndefinitePriceCalculated)
+        }
     }
 
     pub fn price_from_flow(&self, rate: f64, flow: &[(f64, f64)]) -> f64 {
@@ -233,26 +277,33 @@ impl Bond {
         flow.iter().map(|&(t, cf)| cf / b.powf(t)).sum()
     }
 
-    pub fn ytm_bisection(&self, market_price: f64, settlement: NaiveDate) -> Option<f64> {
-        let flows = self
-            .flows(settlement)
-            .expect("settlement must be before maturity");
+    pub fn ytm_bisection(
+        &self,
+        market_price: f64,
+        settlement: NaiveDate,
+    ) -> Result<f64, BondError> {
+        Self::validate_market_price(market_price)?;
+        let flows = self.flows(settlement)?;
         self.ytm_bisection_from_flow(market_price, flows.as_slice())
     }
 
-    pub fn ytm_bisection_from_flow(&self, market_price: f64, flow: &[(f64, f64)]) -> Option<f64> {
+    pub fn ytm_bisection_from_flow(
+        &self,
+        market_price: f64,
+        flow: &[(f64, f64)],
+    ) -> Result<f64, BondError> {
         let (mut l, mut r) = (-0.999, 5.0);
         if market_price <= 0.0
             || market_price > self.price_from_flow(l, flow)
             || market_price < self.price_from_flow(r, flow)
         {
-            return None;
+            return Err(BondError::InvalidMarketPrice);
         }
         let mut iter = 0;
         while r - l > 1e-12 {
             let mid = (l + r) / 2.0;
             if iter > 60 {
-                return None;
+                return Err(BondError::NoConvergence);
             }
             if self.price_from_flow(mid, flow) < market_price {
                 r = mid;
@@ -261,22 +312,21 @@ impl Bond {
             }
             iter += 1;
         }
-        Some((l + r) / 2.0)
+        Ok((l + r) / 2.0)
     }
 
-    pub fn ytm(&self, market_price: f64, settlement: NaiveDate) -> Option<f64> {
-        let flows = self
-            .flows(settlement)
-            .expect("settlement must be before maturity");
+    pub fn ytm(&self, market_price: f64, settlement: NaiveDate) -> Result<f64, BondError> {
+        Self::validate_market_price(market_price)?;
+        let flows = self.flows(settlement)?;
         self.ytm_from_flow(market_price, flows.as_slice())
     }
 
-    pub fn ytm_from_flow(&self, market_price: f64, flow: &[(f64, f64)]) -> Option<f64> {
+    pub fn ytm_from_flow(&self, market_price: f64, flow: &[(f64, f64)]) -> Result<f64, BondError> {
         if market_price <= 0.0
             || market_price > self.price_from_flow(-0.99, flow)
             || market_price < self.price_from_flow(5.0, flow)
         {
-            return None;
+            return Err(BondError::InvalidMarketPrice);
         }
         let mut y = self.get_rate();
         let mut prev_y;
@@ -290,7 +340,7 @@ impl Bond {
             y += (price - market_price) * self.base(y) / self.pv_weighted_time_from_flow(y, flow);
             iter += 1;
             if (y - prev_y).abs() < 1e-12 {
-                return Some(y);
+                return Ok(y);
             }
         }
     }
@@ -300,56 +350,50 @@ impl Bond {
     }
 
     /// Σ t · PV(t)
-    fn _pv_weighted_time(&self, rate: f64, settlement: NaiveDate) -> f64 {
-        let flows = self
-            .flows(settlement)
-            .expect("settlement must be before maturity");
-        self.pv_weighted_time_from_flow(rate, flows.as_slice())
-    }
-
     fn pv_weighted_time_from_flow(&self, rate: f64, flow: &[(f64, f64)]) -> f64 {
         let b = self.base(rate);
         flow.iter().map(|&(t, cf)| t * cf / b.powf(t)).sum()
     }
 
-    pub fn macaulay_duration(&self, rate: f64, settlement: NaiveDate) -> f64 {
-        let flows = self
-            .flows(settlement)
-            .expect("settlement must be before maturity");
-        self.macaulay_duration_from_flow(rate, flows.as_slice())
+    pub fn macaulay_duration(&self, rate: f64, settlement: NaiveDate) -> Result<f64, BondError> {
+        Self::validate_rate(rate)?;
+        let flows = self.flows(settlement)?;
+        Ok(self.macaulay_duration_from_flow(rate, flows.as_slice()))
     }
 
     pub fn macaulay_duration_from_flow(&self, rate: f64, flow: &[(f64, f64)]) -> f64 {
         self.pv_weighted_time_from_flow(rate, flow) / self.price_from_flow(rate, flow)
     }
 
-    pub fn modified_duration(&self, rate: f64, settlement: NaiveDate) -> f64 {
-        let flows = self
-            .flows(settlement)
-            .expect("settlement must be before maturity");
-        self.modified_duration_from_flow(rate, flows.as_slice())
+    pub fn modified_duration(&self, rate: f64, settlement: NaiveDate) -> Result<f64, BondError> {
+        Self::validate_rate(rate)?;
+        let flows = self.flows(settlement)?;
+        Ok(self.modified_duration_from_flow(rate, flows.as_slice()))
     }
 
     pub fn modified_duration_from_flow(&self, rate: f64, flow: &[(f64, f64)]) -> f64 {
         self.macaulay_duration_from_flow(rate, flow) / self.base(rate)
     }
 
-    pub fn dv01(&self, rate: f64, settlement: NaiveDate) -> f64 {
-        let flows = self
-            .flows(settlement)
-            .expect("settlement must be before maturity");
-        self.dv01_from_flow(rate, flows.as_slice())
+    pub fn dv01(&self, rate: f64, settlement: NaiveDate) -> Result<f64, BondError> {
+        Self::validate_rate(rate)?;
+        let flows = self.flows(settlement)?;
+        Ok(self.dv01_from_flow(rate, flows.as_slice()))
     }
 
     pub fn dv01_from_flow(&self, rate: f64, flow: &[(f64, f64)]) -> f64 {
         self.pv_weighted_time_from_flow(rate, flow) / self.base(rate) * 0.0001
     }
 
-    pub fn price_change_pct(&self, rate: f64, delta_rate: f64, settlement: NaiveDate) -> f64 {
-        let flows = self
-            .flows(settlement)
-            .expect("settlement must be before maturity");
-        self.price_change_pct_from_flow(rate, delta_rate, flows.as_slice())
+    pub fn price_change_pct(
+        &self,
+        rate: f64,
+        delta_rate: f64,
+        settlement: NaiveDate,
+    ) -> Result<f64, BondError> {
+        Self::validate_rate(rate)?;
+        let flows = self.flows(settlement)?;
+        Ok(self.price_change_pct_from_flow(rate, delta_rate, flows.as_slice()))
     }
 
     pub fn price_change_pct_from_flow(
@@ -362,16 +406,10 @@ impl Bond {
     }
 
     /// Σ t(t+1) · PV(t) / (1+y)² / цена
-    pub fn convexity(&self, rate: f64, settlement: NaiveDate) -> f64 {
-        let b = self.base(rate);
-        let flows = self
-            .flows(settlement)
-            .expect("settlement must be before maturity");
-        let s: f64 = flows
-            .iter()
-            .map(|&(t, cf)| t * (t + 1.0) * cf / b.powf(t))
-            .sum();
-        s / (b * b) / self.price_from_flow(rate, flows.as_slice())
+    pub fn convexity(&self, rate: f64, settlement: NaiveDate) -> Result<f64, BondError> {
+        Self::validate_rate(rate)?;
+        let flows = self.flows(settlement)?;
+        Ok(self.convexity_from_flow(rate, flows.as_slice()))
     }
 
     pub fn convexity_from_flow(&self, rate: f64, flow: &[(f64, f64)]) -> f64 {
@@ -388,12 +426,11 @@ impl Bond {
         rate: f64,
         delta_rate: f64,
         settlement: NaiveDate,
-    ) -> f64 {
-        let flows = self
-            .flows(settlement)
-            .expect("settlement must be before maturity");
-        self.price_from_flow(rate, flows.as_slice())
-            * (1.0 + self.price_change_pct_from_flow(rate, delta_rate, flows.as_slice()))
+    ) -> Result<f64, BondError> {
+        Self::validate_rate(rate)?;
+        let flows = self.flows(settlement)?;
+        Ok(self.price_from_flow(rate, flows.as_slice())
+            * (1.0 + self.price_change_pct_from_flow(rate, delta_rate, flows.as_slice())))
     }
 
     pub fn price_estimate_convexity(
@@ -401,13 +438,12 @@ impl Bond {
         rate: f64,
         delta_rate: f64,
         settlement: NaiveDate,
-    ) -> f64 {
-        let flows = self
-            .flows(settlement)
-            .expect("settlement must be before maturity");
-        self.price_from_flow(rate, flows.as_slice())
+    ) -> Result<f64, BondError> {
+        Self::validate_rate(rate)?;
+        let flows = self.flows(settlement)?;
+        Ok(self.price_from_flow(rate, flows.as_slice())
             * (1.0 - self.modified_duration_from_flow(rate, flows.as_slice()) * delta_rate
-                + 0.5 * self.convexity_from_flow(rate, flows.as_slice()) * delta_rate * delta_rate)
+                + 0.5 * self.convexity_from_flow(rate, flows.as_slice()) * delta_rate * delta_rate))
     }
 
     pub fn shift_table(
@@ -415,36 +451,38 @@ impl Bond {
         rate: f64,
         shifts_bp: &[f64],
         settlement: NaiveDate,
-    ) -> Vec<ShiftRow> {
-        let an = self.analytics(rate, settlement);
-        let flows = self
-            .flows(settlement)
-            .expect("settlement must be before maturity");
+    ) -> Result<Vec<ShiftRow>, BondError> {
+        Self::validate_rate(rate)?;
+        let flows = self.flows(settlement)?;
+        let an = self.analytics_from_flow(rate, flows.as_slice());
         shifts_bp
             .iter()
             .map(|&bp| {
                 let delta_rate = bp / 10_000.0;
-                ShiftRow {
+                Self::validate_rate(rate + delta_rate)?;
+                Ok(ShiftRow {
                     shift_bp: bp,
                     exact: self.price_from_flow(rate + delta_rate, flows.as_slice()),
                     duration_est: an.price * (1.0 - an.modified_duration * delta_rate),
                     convexity_est: an.price
                         * (1.0 - an.modified_duration * delta_rate
                             + 0.5 * an.convexity * delta_rate * delta_rate),
-                }
+                })
             })
             .collect()
     }
 
     /// one-pass analytics for better performance; returns batch of metrics
-    pub fn analytics(&self, rate: f64, settlement: NaiveDate) -> BondAnalytics {
+    pub fn analytics(&self, rate: f64, settlement: NaiveDate) -> Result<BondAnalytics, BondError> {
+        Self::validate_rate(rate)?;
+        let flows = self.flows(settlement)?;
+        Ok(self.analytics_from_flow(rate, flows.as_slice()))
+    }
+
+    pub fn analytics_from_flow(&self, rate: f64, flows: &[(f64, f64)]) -> BondAnalytics {
         let b = self.base(rate);
         let (mut pr, mut wt, mut cv) = (0.0, 0.0, 0.0);
-        for (t, cf) in self
-            .flows(settlement)
-            .expect("settlement must be before maturity")
-            .iter()
-        {
+        for (t, cf) in flows.iter() {
             let pv = cf / b.powf(*t);
             pr += pv;
             wt += t * pv;
@@ -462,18 +500,16 @@ impl Bond {
     }
 
     /// accrued interest (НКД) at settlement; 0 on coupon dates and for zero-coupon bonds
-    pub fn accrued(&self, settlement: NaiveDate) -> f64 {
-        if settlement >= self.maturity || self.nature == CouponRule::ZeroCoupon {
-            return 0.0;
-        }
-        let cfs = self
-            .cashflows()
-            .expect("cashflow error at accrued calculation");
-        self.accrued_from_flow(settlement, cfs.as_slice())
+    pub fn accrued(&self, settlement: NaiveDate) -> Result<f64, BondError> {
+        let cfs = self.cashflows()?;
+        Ok(self.accrued_from_flow(settlement, cfs.as_slice()))
     }
 
     pub fn accrued_from_flow(&self, settlement: NaiveDate, cfs: &[(NaiveDate, f64)]) -> f64 {
-        if settlement >= self.maturity || self.nature == CouponRule::ZeroCoupon {
+        if settlement <= self.issue_date
+            || settlement >= self.maturity
+            || self.nature == CouponRule::ZeroCoupon
+        {
             return 0.0;
         }
         let prev = cfs
@@ -485,7 +521,7 @@ impl Bond {
             .iter()
             .map(|&(d, _)| d)
             .find(|&d| d > settlement)
-            .unwrap();
+            .expect("maturity is always in cashflows");
         match self.nature {
             CouponRule::ZeroCoupon => 0.0,
             CouponRule::Frequent { frequency, rate } => {
@@ -500,28 +536,20 @@ impl Bond {
     }
 
     /// clean = dirty_price - accrued
-    pub fn clean_price(&self, rate: f64, settlement: NaiveDate) -> f64 {
-        let cfs = self
-            .cashflows()
-            .expect("settlement must be before maturity");
-        let flows = self
-            .compute_flows_from_cfs(settlement, cfs.as_slice())
-            .expect("settlement must be before maturity");
-        self.price_from_flow(rate, flows.as_slice())
-            - self.accrued_from_flow(settlement, cfs.as_slice())
+    pub fn clean_price(&self, rate: f64, settlement: NaiveDate) -> Result<f64, BondError> {
+        Self::validate_rate(rate)?;
+        let cfs = self.cashflows()?;
+        let flows = self.compute_flows_from_cfs(settlement, cfs.as_slice())?;
+        Ok(self.price_from_flow(rate, flows.as_slice())
+            - self.accrued_from_flow(settlement, cfs.as_slice()))
     }
 
     /// ytm_from_clean(price = clean) = ytm(price = clean + accrued)
-    pub fn ytm_from_clean(&self, clean: f64, settlement: NaiveDate) -> Option<f64> {
-        let cfs = self
-            .cashflows()
-            .expect("settlement must be before maturity");
-        let flows = self
-            .compute_flows_from_cfs(settlement, cfs.as_slice())
-            .expect("settlement must be before maturity");
-        self.ytm_from_flow(
-            clean + self.accrued_from_flow(settlement, cfs.as_slice()),
-            flows.as_slice(),
-        )
+    pub fn ytm_from_clean(&self, clean: f64, settlement: NaiveDate) -> Result<f64, BondError> {
+        let cfs = self.cashflows()?;
+        let flows = self.compute_flows_from_cfs(settlement, cfs.as_slice())?;
+        let market_price = clean + self.accrued_from_flow(settlement, cfs.as_slice());
+        Self::validate_market_price(market_price)?;
+        self.ytm_from_flow(market_price, flows.as_slice())
     }
 }

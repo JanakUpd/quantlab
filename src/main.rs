@@ -1,6 +1,6 @@
 use chrono::NaiveDate;
 use clap::{Parser, Subcommand};
-use quantlab::bonds::{Bond, BondFrequency};
+use quantlab::bonds::{Bond, BondError, BondFrequency};
 use quantlab::options::analytic::black_scholes;
 use quantlab::options::monte_carlo::*;
 use quantlab::options::option::EuropeanOption;
@@ -101,33 +101,22 @@ fn run_bond(
     yld: Option<f64>,
     price: Option<f64>,
     shifts: &[f64],
-) {
-    if let Err(e) = bond.cashflows() {
-        fail(format!("invalid bond dates: {e:?}"));
-    }
+) -> Result<(), BondError> {
     if settlement < bond.get_issue_date() {
         fail(format!(
             "settlement {settlement} is before issue date {}",
             bond.get_issue_date()
         ));
     }
-    if settlement >= bond.get_maturity() {
-        fail(format!(
-            "settlement {settlement} must be before maturity {}",
-            bond.get_maturity()
-        ));
-    }
 
     // --price is a clean (quoted) price, in the same units as --face
     let yld = match (yld, price) {
         (Some(y), _) => y,
-        (None, Some(p)) => bond.ytm_from_clean(p, settlement).unwrap_or_else(|| {
-            fail(format!(
-                "no yield in [-99.9%, 500%] matches clean price {p}"
-            ));
-        }),
+        (None, Some(p)) => bond.ytm_from_clean(p, settlement)?,
         (None, None) => unreachable!("clap requires --yield or --price"),
     };
+
+    let an = bond.analytics(yld, settlement)?;
 
     println!(
         "Bond: face {}, issued {}, matures {}, {:?}",
@@ -141,41 +130,25 @@ fn run_bond(
     println!(
         "{:<20}{:>10.4}",
         "Clean price:",
-        bond.clean_price(yld, settlement)
+        bond.clean_price(yld, settlement)?
     );
     println!(
         "{:<20}{:>10.4}",
         "Accrued interest:",
-        bond.accrued(settlement)
+        bond.accrued(settlement)?
     );
-    println!(
-        "{:<20}{:>10.4}",
-        "Dirty price:",
-        bond.price(yld, settlement)
-    );
-    println!(
-        "{:<20}{:>10.4}",
-        "Macaulay duration:",
-        bond.macaulay_duration(yld, settlement)
-    );
-    println!(
-        "{:<20}{:>10.4}",
-        "Modified duration:",
-        bond.modified_duration(yld, settlement)
-    );
-    println!("{:<20}{:>10.4}", "DV01:", bond.dv01(yld, settlement));
-    println!(
-        "{:<20}{:>10.4}",
-        "Convexity:",
-        bond.convexity(yld, settlement)
-    );
+    println!("{:<20}{:>10.4}", "Dirty price:", an.price);
+    println!("{:<20}{:>10.4}", "Macaulay duration:", an.macaulay_duration);
+    println!("{:<20}{:>10.4}", "Modified duration:", an.modified_duration);
+    println!("{:<20}{:>10.4}", "DV01:", an.dv01);
+    println!("{:<20}{:>10.4}", "Convexity:", an.convexity);
     println!();
     println!("Shift table (dirty prices):");
     println!(
         "{:>10} {:>10} {:>10} {:>10} {:>9} {:>9}",
         "Shift(bp)", "Exact", "Duration", "Dur+Conv", "Err(D)", "Err(D+C)"
     );
-    for x in bond.shift_table(yld, shifts, settlement) {
+    for x in bond.shift_table(yld, shifts, settlement)? {
         println!(
             "{:>+10.0} {:>10.4} {:>10.4} {:>10.4} {:>+9.4} {:>+9.4}",
             x.shift_bp,
@@ -186,6 +159,7 @@ fn run_bond(
             x.convexity_est - x.exact
         );
     }
+    Ok(())
 }
 
 fn main() {
@@ -233,7 +207,9 @@ fn main() {
                     Bond::frequent(issue, face, maturity, frequency, rate)
                 }
             };
-            run_bond(bond, settlement.unwrap_or(issue), yld, price, &shifts)
+            if let Err(e) = run_bond(bond, settlement.unwrap_or(issue), yld, price, &shifts) {
+                fail(e.to_string());
+            }
         }
     }
 }

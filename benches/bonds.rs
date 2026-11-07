@@ -57,7 +57,7 @@ fn huge_bond(issue: NaiveDate, cached: bool) -> Bond {
 /// apart from a few extra price calls.
 fn warm(bond: Bond, settlements: &[NaiveDate]) -> Bond {
     for &s in settlements {
-        black_box(bond.price(Y, s));
+        black_box(bond.price(Y, s).unwrap());
     }
     bond
 }
@@ -88,7 +88,7 @@ fn bench_warm(
         ("30y semi-annual", long),
         ("5000y semi-annual", huge),
     ] {
-        let p = bond.price(0.07, s);
+        let p = bond.price(0.07, s).unwrap();
         g.bench_function(format!("ytm (bisection), {name}"), |b| {
             b.iter(|| black_box(bond).ytm_bisection(black_box(p), black_box(s)))
         });
@@ -119,8 +119,8 @@ fn bench_warm(
 fn bench_cold(c: &mut Criterion, issue: NaiveDate, s: NaiveDate) {
     let mut g = c.benchmark_group("cold");
 
-    let p5 = short_bond(issue, false).price(0.07, s);
-    let p30 = long_bond(issue, false).price(0.07, s);
+    let p5 = short_bond(issue, false).price(0.07, s).unwrap();
+    let p30 = long_bond(issue, false).price(0.07, s).unwrap();
 
     for cached in [false, true] {
         let mode = if cached { "cache miss" } else { "no cache" };

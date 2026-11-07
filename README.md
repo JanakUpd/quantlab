@@ -13,6 +13,7 @@ A quantitative finance toolkit in Rust: European option pricing (closed-form Bla
 - **Valuation on any date**: price a bond at its issue or on any later settlement date, with accrued interest (НКД) and clean/dirty price
 - **Bond analytics**: price, yield to maturity (from a dirty or a clean price), Macaulay and modified duration, DV01, convexity
 - **Rate-shift sensitivity table** comparing exact repricing with duration and duration + convexity estimates
+- **Explicit errors**: every public bond method returns `Result<_, BondError>`; invalid dates, rates and prices are reported, not panicked on
 - **Optional cash-flow cache** ([moka](https://github.com/moka-rs/moka)) for repeated valuations of the same bond on the same dates; off by default
 - **Tests** against independently computed reference values, put–call parity, numerical derivatives, statistical agreement between methods and two real bonds checked against a broker app
 - **Benchmarks** with criterion
@@ -128,6 +129,8 @@ cargo run --release -- bond --coupon 0.071 --issue 2025-01-01 --maturity 2026-12
 cargo run --release -- bond --issue 2025-01-01 --maturity 2028-01-01 --yield 0.08
 ```
 
+Invalid input (for example a settlement date at or after maturity, or a price no yield can produce) is reported as an error message and a non-zero exit code.
+
 | Flag | Meaning | Default |
 |------|---------|--------:|
 | `--face` | Face value | `100` |
@@ -168,19 +171,33 @@ where $y$ is an annual effective yield. This is the dirty price.
 
 $$\text{Frequent: } \frac{F\,r}{m}\cdot\frac{s - p}{n - p}, \qquad \text{DateBased: } F\,r\,\frac{s - p}{365}$$
 
-The frequent-coupon formula is actual/actual by period, so accrued interest reaches exactly one coupon on the payment date; the day-based formula is actual/365, as for Russian federal bonds (ОФЗ). Accrued interest is 0 on a coupon date, at issue and for zero-coupon bonds. For the first period $p$ is the issue date.
+The frequent-coupon formula is actual/actual by period, so accrued interest reaches exactly one coupon on the payment date; the day-based formula is actual/365, as for Russian federal bonds (ОФЗ). Accrued interest is 0 on a coupon date, on or before the issue date and for zero-coupon bonds. For the first period $p$ is the issue date.
 
 **Clean and dirty price.** $P_{clean} = P_{dirty} - \text{accrued}$. The dirty price drops by a coupon on every payment date, the clean price does not, which is why markets quote it. `ytm_from_clean` converts a quote to a dirty price before solving for yield, so a quoted price is not mistaken for a full one.
 
 **Cash-flow cache.** By default every pricing call computes the payment schedule from scratch. Methods that need the schedule several times (yield, durations, the shift table) compute it once per call and pass it down as a slice. For workloads that value the same bond on the same dates many times, `Bond::with_cache(capacity)` adds a bounded cache of discounted-time cash flows keyed by settlement date. Results are identical with and without it; see [Performance](#performance) for when it pays off.
 
-**Current limitations.** The day count is actual/365 (actual/actual by period for accrued interest on frequent coupons), there are no holiday calendars, and the settlement date is taken as given: there is no business-day or T+1 convention. A first coupon period shorter than the regular one still pays a full coupon. Pricing methods panic if the settlement date is not before maturity; the CLI checks this up front.
+**Errors.** Public methods return `Result<_, BondError>`:
+
+| Error | When |
+|-------|------|
+| `MaturityBeforeIssue` | maturity is not after the issue date |
+| `MaturityBeforeSettlement` | settlement date is not before maturity |
+| `InvalidRate` | yield is `NaN`, infinite or at or below −100% |
+| `InvalidMarketPrice` | price is `NaN`, non-positive, or outside what any yield in [−99.9%, 500%] can produce |
+| `IndefinitePriceCalculated` | the price overflowed to a non-finite value |
+| `NoConvergence` | the bisection solver did not converge |
+| `DateOutOfRange` | a coupon date falls outside the range `chrono` supports |
+
+The `*_from_flow` methods are low-level building blocks that work on a precomputed schedule and do not validate their input.
+
+**Current limitations.** The day count is actual/365 (actual/actual by period for accrued interest on frequent coupons), there are no holiday calendars, and the settlement date is taken as given: there is no business-day or T+1 convention. A first coupon period shorter than the regular one still pays a full coupon.
 
 ## As a library
 
 ```rust
 use chrono::NaiveDate;
-use quantlab::bonds::{Bond, BondFrequency};
+use quantlab::bonds::{Bond, BondError, BondFrequency};
 use quantlab::options::analytic::black_scholes;
 use quantlab::options::monte_carlo::monte_carlo_call_multithread;
 use quantlab::options::option::EuropeanOption;
@@ -194,11 +211,16 @@ let maturity = NaiveDate::from_ymd_opt(2030, 6, 15).unwrap();
 let bond = Bond::frequent(issue, 100.0, maturity, BondFrequency::Annual, 0.05);
 let cashflows = bond.cashflows().unwrap(); // Vec<(NaiveDate, f64)>
 let settlement = NaiveDate::from_ymd_opt(2027, 9, 1).unwrap();
-let dirty = bond.price(0.05, settlement);
-let accrued = bond.accrued(settlement);
-let clean = bond.clean_price(0.05, settlement);
-let ytm = bond.ytm_from_clean(99.969, settlement); // Option<f64>
-let duration = bond.modified_duration(0.05, settlement);
+
+// every bond method returns Result<_, BondError>
+let dirty = bond.price(0.05, settlement).unwrap();
+let accrued = bond.accrued(settlement).unwrap();
+let clean = bond.clean_price(0.05, settlement).unwrap();
+let ytm = bond.ytm_from_clean(99.969, settlement).unwrap();
+let duration = bond.modified_duration(0.05, settlement).unwrap();
+
+// invalid input is an error, not a panic
+assert_eq!(bond.price(0.05, maturity), Err(BondError::MaturityBeforeSettlement));
 
 // Optional: cache cash flows per settlement date (up to 1024 dates)
 let cached = bond.clone().with_cache(1024);
@@ -232,7 +254,7 @@ benches/
 
 Measured with [criterion](https://github.com/bheisler/criterion.rs).
 
-Numbers below come from a desktop Ryzen 7 9700X; run-to-run noise is around ±10%, so small differences should not be over-read.
+Numbers below come from a desktop Ryzen 7 9700X; run-to-run noise is around ±10%, so small differences should not be over-read. On an Apple M4 laptop the same benchmarks run roughly 20–30% faster, with the same relative effects (cache gain, one pass versus two, Newton versus bisection).
 
 Options, ATM call, `cargo bench --bench pricing` (measured on Windows):
 
@@ -300,7 +322,8 @@ Bonds:
 
 - cash-flow schedules: payment dates strictly increase and never fall on the issue date, end-of-month dates do not drift, a short first period when issued mid-period, exact day intervals for day-based coupons, a single payment for zero-coupon bonds, and an error when maturity is not after issue
 - prices, durations and the shift table against reference values computed independently in Python (annual and semi-annual)
-- valuation on a settlement date inside the bond's life: a coupon on the settlement date is excluded, mid-period and one-day-before-maturity references, `ytm` round trip, and a panic when settlement is not before maturity
+- valuation on a settlement date inside the bond's life: a coupon on the settlement date is excluded, mid-period and one-day-before-maturity references, and `ytm` round trip
+- errors: `MaturityBeforeSettlement` from every method when settlement is not before maturity, `InvalidMarketPrice` for impossible prices
 - accrued interest: zero at issue, on coupon dates and for zero-coupon bonds; reference values for annual, semi-annual, day-based and end-of-month schedules; grows monotonically within a period
 - clean price: clean equals dirty on coupon dates, is continuous across a coupon date while the dirty price jumps, and `ytm_from_clean` round-trips on several settlement dates
 - modified duration and convexity match numerical first and second derivatives
@@ -308,6 +331,7 @@ Bonds:
 - zero-coupon Macaulay duration equals the time to maturity in days / 365; higher coupon means lower duration
 - the duration-only estimate always undershoots the exact price, and convexity reduces the error
 - Newton and bisection agree on yield to 1e-9 across zero, negative and high yields
+- results with and without the cash-flow cache are identical, on a cache miss and on a hit, and errors are not cached
 - a real ОФЗ-ПД checked against a broker app quote (clean price 842, accrued interest 5.7 ₽, yield 16.65%): the 182-day schedule hits the real coupon date, accrued interest and yield match to the app's rounding
 - a real corporate bond with 30-day coupons and a fixed ruble coupon, checked the same way (accrued interest 6.09 ₽, yield 16.04%); the coupon rate has to be taken from the ruble amount, because the percentage shown by the app is rounded
 
@@ -316,7 +340,6 @@ Bonds:
 - [ ] Check a real bond with calendar-month coupons (`Frequent`); the real-bond checks so far cover `DateBased`
 - [ ] Check prices and yields on a larger set of bonds with a script over market data
 - [ ] Faster yield solver: one pass for price and weighted time, cheaper powers
-- [ ] Return `Result` from pricing instead of panicking on invalid dates
 - [ ] Proportional coupon for a shortened first period
 - [ ] Amortizing and floating-rate bonds
 - [ ] Portfolio duration and immunization
@@ -325,6 +348,7 @@ Bonds:
 - [ ] Greeks, analytic and via finite differences
 - [ ] Implied volatility solver
 - [ ] Binomial tree for American options
+- [x] Bonds: `Result<_, BondError>` API with validation of dates, rates and prices instead of panics
 - [x] Bonds: cash flows computed once per call, plus an optional cache for repeated valuations
 - [x] Bonds: yield and accrued interest checked against a real ОФЗ and a real corporate bond
 - [x] Bonds: valuation on an arbitrary settlement date
