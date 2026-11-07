@@ -149,7 +149,7 @@ Invalid input (for example a settlement date at or after maturity, or a price no
 
 The coupon amount is
 
-$$\text{Frequent: } \frac{F\,r}{m}, \qquad \text{DateBased: } \frac{F\,r\,d}{365},$$
+$$\text{Frequent: } \frac{F\cdot r}{m}, \qquad \text{DateBased: } \frac{F\cdot r\cdot d}{365},$$
 
 where $F$ is the face value, $r$ the annual rate, $m$ the number of coupons per year and $d$ the interval in days.
 
@@ -169,7 +169,7 @@ where $y$ is an annual effective yield. This is the dirty price.
 
 **Accrued interest.** With $p$ and $n$ the previous and next coupon dates around the settlement date $s$:
 
-$$\text{Frequent: } \frac{F\,r}{m}\cdot\frac{s - p}{n - p}, \qquad \text{DateBased: } F\,r\,\frac{s - p}{365}$$
+$$\text{Frequent: } \frac{F\cdot r}{m}\cdot\frac{s - p}{n - p}, \qquad \text{DateBased: } F\cdot r\,\frac{s - p}{365}$$
 
 The frequent-coupon formula is actual/actual by period, so accrued interest reaches exactly one coupon on the payment date; the day-based formula is actual/365, as for Russian federal bonds (ОФЗ). Accrued interest is 0 on a coupon date, on or before the issue date and for zero-coupon bonds. For the first period $p$ is the issue date.
 
