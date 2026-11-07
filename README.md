@@ -48,7 +48,7 @@ The simulation agrees with the analytic price within its standard error, and the
 
 $$C = S\,N(d_1) - K e^{-rT} N(d_2), \qquad P = K e^{-rT} N(-d_2) - S\,N(-d_1)$$
 
-$$d_1 = \frac{\ln(S/K) + (r + \sigma^2/2)\,T}{\sigma\sqrt{T}}, \qquad d_2 = d_1 - \sigma\sqrt{T}$$
+$$d_1 = \frac{\ln(S/K) + (r + \sigma^2/2)\cdot T}{\sigma\sqrt{T}}, \qquad d_2 = d_1 - \sigma\sqrt{T}$$
 
 where $N$ is the standard normal CDF.
 
@@ -56,7 +56,7 @@ where $N$ is the standard normal CDF.
 
 Terminal prices are sampled under the risk-neutral measure:
 
-$$S_T = S \exp\left(\left(r - \tfrac{\sigma^2}{2}\right)T + \sigma\sqrt{T}\,Z\right), \qquad Z \sim N(0, 1)$$
+$$S_T = S \exp\left(\left(r - \tfrac{\sigma^2}{2}\right)\cdot T + \sigma\cdot\sqrt{T} \cdot Z\right), \qquad Z \sim N(0, 1)$$
 
 The price is the discounted mean payoff, $e^{-rT}\,\overline{\max(S_T - K, 0)}$, and the standard error is $e^{-rT}\,s/\sqrt{n}$, where $s$ is the sample standard deviation of the payoffs. Mean and variance are accumulated as running sums, so memory use does not grow with the number of paths.
 
@@ -159,17 +159,17 @@ $$P(y) = \sum_k \frac{CF_k}{(1 + y)^{t_k}}, \qquad t_k = \frac{\text{days}(\text
 
 where $y$ is an annual effective yield. This is the dirty price.
 
-- **Yield to maturity** is found by Newton's method, $y_{n+1} = y_n + \frac{P(y_n) - P_{market}}{D_{mod}\,P(y_n)}$, starting from the coupon rate. Price is strictly decreasing and convex in yield, so the root is unique and Newton converges in a few steps; bisection is kept as a fallback if it fails to converge.
+- **Yield to maturity** is found by Newton's method, $y_{n+1} = y_n + \frac{P(y_n) - P_{market}}{D_{mod}\cdot P(y_n)}$, starting from the coupon rate. Price is strictly decreasing and convex in yield, so the root is unique and Newton converges in a few steps; bisection is kept as a fallback if it fails to converge.
 - **Macaulay duration** is the present-value-weighted average time of the cash flows; **modified duration** $D_{mod} = D_{mac}/(1 + y)$ is the price sensitivity, $dP/dy = -D_{mod} P$.
 - **DV01** is the price change for a 1 bp move: $D_{mod} \cdot P \cdot 10^{-4}$.
 - **Convexity** is the normalized second derivative of price:
-  $$C = \frac{1}{P}\sum_k \frac{t_k (t_k + 1)\, CF_k}{(1 + y)^{t_k + 2}}$$
+  $$C = \frac{1}{P}\sum_k \frac{t_k\cdot (t_k + 1)\cdot CF_k}{(1 + y)^{t_k + 2}}$$
 - Together they give a second-order Taylor expansion:
-  $$\frac{\Delta P}{P} \approx -D_{mod}\,\Delta y + \tfrac12 C\,(\Delta y)^2$$
+  $$\frac{\Delta P}{P} \approx -D_{mod}\cdot \Delta y + \tfrac12 C\cdot (\Delta y)^2$$
 
 **Accrued interest.** With $p$ and $n$ the previous and next coupon dates around the settlement date $s$:
 
-$$\text{Frequent: } \frac{F\cdot r}{m}\cdot\frac{s - p}{n - p}, \qquad \text{DateBased: } F\cdot r\,\frac{s - p}{365}$$
+$$\text{Frequent: } \frac{F\cdot r}{m}\cdot\frac{s - p}{n - p}, \qquad \text{DateBased: } F\cdot r\cdot\frac{s - p}{365}$$
 
 The frequent-coupon formula is actual/actual by period, so accrued interest reaches exactly one coupon on the payment date; the day-based formula is actual/365, as for Russian federal bonds (ОФЗ). Accrued interest is 0 on a coupon date, on or before the issue date and for zero-coupon bonds. For the first period $p$ is the issue date.
 
