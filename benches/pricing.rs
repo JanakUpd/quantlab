@@ -2,16 +2,18 @@ use std::hint::black_box;
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use quantlab::options::analytic::black_scholes;
-use quantlab::options::monte_carlo::{monte_carlo_call, monte_carlo_call_multithread};
-use quantlab::options::option::EuropeanOption;
+use quantlab::options::option::{OptionContract, OptionKind, OptionType};
 
-fn atm() -> EuropeanOption {
-    EuropeanOption {
+fn atm() -> OptionContract {
+    OptionContract {
         spot: 100.0,
         strike: 100.0,
         time: 1.0,
         rate: 0.05,
         vol: 0.2,
+        dividend_yield: 0.0,
+        option_type: OptionType::Call,
+        option_kind: OptionKind::European,
     }
 }
 
@@ -29,11 +31,11 @@ fn bench_monte_carlo(c: &mut Criterion) {
         group.throughput(Throughput::Elements(paths as u64));
 
         group.bench_with_input(BenchmarkId::new("single", paths), &paths, |b, &n| {
-            b.iter(|| monte_carlo_call(black_box(&p), n, 42))
+            b.iter(|| black_box(&p).monte_carlo(n, 42))
         });
 
         group.bench_with_input(BenchmarkId::new("multi", paths), &paths, |b, &n| {
-            b.iter(|| monte_carlo_call_multithread(black_box(&p), n, 42))
+            b.iter(|| black_box(&p).monte_carlo_multithread(n, 42))
         });
     }
 

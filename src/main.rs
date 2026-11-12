@@ -2,8 +2,7 @@ use chrono::NaiveDate;
 use clap::{Parser, Subcommand};
 use quantlab::bonds::{Bond, BondError, BondFrequency};
 use quantlab::options::analytic::black_scholes;
-use quantlab::options::monte_carlo::*;
-use quantlab::options::option::EuropeanOption;
+use quantlab::options::option::{OptionContract, OptionError, OptionKind, OptionType};
 use std::num::NonZeroU16;
 use std::time::Instant;
 
@@ -27,6 +26,12 @@ enum Command {
         rate: f64,
         #[arg(long, default_value_t = 0.2)]
         vol: f64,
+        /// Continuous dividend yield
+        #[arg(long, default_value_t = 0.0)]
+        dividend: f64,
+        /// Price a put in the Monte Carlo runs (default: call)
+        #[arg(long)]
+        put: bool,
         #[arg(long, default_value_t = 1_000_000)]
         paths: usize,
     },
@@ -70,24 +75,30 @@ enum Command {
     },
 }
 
-fn run_option(p: EuropeanOption, paths: usize) {
-    let (c, put) = black_scholes(&p);
+fn run_option(p: OptionContract, paths: usize) -> Result<(), OptionError> {
+    let (c, put) = black_scholes(&p)?;
     println!("Black-Scholes:  call = {c:.4}   put = {put:.4}");
 
-    let start = Instant::now();
-    let (c, se) = monte_carlo_call(&p, paths, 42);
-    let single = start.elapsed();
-    println!("MC single:      call = {c:.4} ± {se:.4}   ({single:.2?})");
+    let kind = match p.option_type {
+        OptionType::Call => "call",
+        OptionType::Put => "put",
+    };
 
     let start = Instant::now();
-    let (c, se) = monte_carlo_call_multithread(&p, paths, 42);
+    let (v, se) = p.monte_carlo(paths, 42)?;
+    let single = start.elapsed();
+    println!("MC single:      {kind} = {v:.4} ± {se:.4}   ({single:.2?})");
+
+    let start = Instant::now();
+    let (v, se) = p.monte_carlo_multithread(paths, 42)?;
     let multi = start.elapsed();
-    println!("MC multi:       call = {c:.4} ± {se:.4}   ({multi:.2?})");
+    println!("MC multi:       {kind} = {v:.4} ± {se:.4}   ({multi:.2?})");
 
     println!(
         "Speedup: {:.2}x",
         single.as_secs_f64() / multi.as_secs_f64()
     );
+    Ok(())
 }
 
 fn fail(msg: String) -> ! {
@@ -170,17 +181,28 @@ fn main() {
             time,
             rate,
             vol,
+            dividend,
+            put,
             paths,
-        } => run_option(
-            EuropeanOption {
+        } => {
+            let contract = OptionContract {
                 spot,
                 strike,
                 time,
                 rate,
                 vol,
-            },
-            paths,
-        ),
+                dividend_yield: dividend,
+                option_type: if put {
+                    OptionType::Put
+                } else {
+                    OptionType::Call
+                },
+                option_kind: OptionKind::European,
+            };
+            if let Err(e) = run_option(contract, paths) {
+                fail(e.to_string());
+            }
+        }
         Command::Bond {
             face,
             coupon,
